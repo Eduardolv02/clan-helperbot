@@ -1,2 +1,5 @@
-python-telegram-bot==20.7
-supabase==2.4.0
+python-telegram-bot==20.8
+fastapi
+uvicorn
+supabase
+python-dotenv
