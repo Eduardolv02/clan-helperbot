@@ -1,6 +1,25 @@
+# Telegram
 python-telegram-bot==13.15
 
-fastapi
-uvicorn
-supabase
-python-dotenv
+# Supabase
+supabase==2.27.0
+supabase-auth==2.27.0
+supabase-functions==2.27.0
+storage3==2.27.0
+postgrest==2.27.0
+
+# FastAPI / Web
+fastapi==0.127.0
+uvicorn==0.40.0
+starlette==0.50.0
+httpx==0.26.0
+realtime==2.27.0
+
+# Utilidades
+python-dotenv==1.2.1
+requests==2.32.5
+rich==14.2.0
+pydantic==2.12.5
+pydantic-core==2.41.5
+python-dateutil==2.9.0.post0
+typing-extensions==4.15.0
