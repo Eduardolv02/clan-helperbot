@@ -1,5 +1,43 @@
+# Telegram
 python-telegram-bot==20.8
-fastapi
-uvicorn
-supabase
-python-dotenv
+
+# FastAPI + Uvicorn
+fastapi==0.127.0
+uvicorn==0.40.0
+
+# Supabase
+supabase==2.27.0
+supabase-auth==2.27.0
+supabase-functions==2.27.0
+postgrest==2.27.0
+storage3==2.27.0
+realtime==2.27.0
+
+# Utilities
+requests==2.32.5
+httpx[http2]==0.26.0
+pydantic==2.12.5
+pydantic-core==2.41.5
+rich==14.2.0
+deprecation==2.1.0
+anyio==4.12.0
+annotated-types==0.7.0
+annotated-doc==0.0.4
+strenum==0.4.15
+packaging==25.0
+tenacity==9.1.2
+python-dotenv==1.2.1
+
+# PyIceberg
+pyiceberg==0.10.0
+cachetools==6.2.4
+
+# Others (compatibility)
+cryptography==46.0.3
+cffi==2.0.0
+yarl==1.22.0
+multidict==6.7.0
+fsspec==2025.12.0
+markdown-it-py==4.0.0
+mdurl==0.1.2
+pyjwt==2.10.1
