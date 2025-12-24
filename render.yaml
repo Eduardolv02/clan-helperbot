@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: telegram-bot
+    runtime: python
+    pythonVersion: 3.12.10
+    startCommand: python main.py
