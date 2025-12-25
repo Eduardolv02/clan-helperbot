@@ -1,4 +1,5 @@
 import os
+import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -7,9 +8,15 @@ from telegram.ext import (
 )
 from supabase import create_client
 
+# ---------------- CONFIG ----------------
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+PORT = int(os.getenv("PORT", 8000))
+
+# ---------------- INIT ----------------
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -145,7 +152,17 @@ async def webhook(req: Request):
     await tg_app.process_update(update)
     return {"ok": True}
 
-# Root para health-check
 @app.get("/")
 async def root():
     return {"status": "ok"}
+
+# ---------------- ENTRYPOINT ----------------
+# 🔥 ESTO ES LO QUE ARREGLA KOYEB FREE
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info"
+    )
