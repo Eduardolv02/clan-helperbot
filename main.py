@@ -12,7 +12,7 @@ from supabase import create_client
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # <- IMPORTANTE
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 # ================== SUPABASE ==================
 
@@ -42,10 +42,10 @@ async def is_admin(bot, gid, uid):
     return m.status in ("administrator", "creator")
 
 def get_group_id():
-    r = supabase.table("meta").select("value").eq("key", "group_id").execute()
+    r = supabase.table("settings").select("value").eq("key", "group_id").execute()
     return int(r.data[0]["value"]) if r.data else None
 
-# ================== START ==================
+# ================== START / REGISTRO ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["uid"] = str(update.effective_user.id)
@@ -64,18 +64,21 @@ async def get_atk(update, context):
 
 async def get_def(update, context):
     uid = context.user_data["uid"]
+    username = update.effective_user.username
 
+    # USERS
     supabase.table("users").upsert({
-        "id": uid,
-        "tg": update.effective_user.username,
+        "uid": uid,
+        "tg": username,
         "guser": context.user_data["guser"],
         "atk": context.user_data["atk"],
         "def": parse_power(update.message.text),
     }).execute()
 
+    # MEMBERS
     supabase.table("members").upsert({
-        "id": uid,
-        "tg": update.effective_user.username,
+        "uid": uid,
+        "tg": username,
         "registered": True,
     }).execute()
 
@@ -90,7 +93,8 @@ async def war(update, context):
         await update.message.reply_text("❌ Solo admins")
         return
 
-    supabase.table("war_votes").delete().neq("user_id", "").execute()
+    # limpiar votos anteriores
+    supabase.table("war_votes").delete().neq("uid", "").execute()
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚔️ Ya envié mis tropas", callback_data="war_yes")]
@@ -99,10 +103,12 @@ async def war(update, context):
 
 async def war_callback(update, context):
     uid = str(update.callback_query.from_user.id)
+
     supabase.table("war_votes").upsert({
-        "user_id": uid,
-        "status": "yes"
+        "uid": uid,
+        "voted": True
     }).execute()
+
     await update.callback_query.answer("✅ Tropas enviadas")
 
 # ================== PSPY (ADMINS) ==================
@@ -113,15 +119,16 @@ async def pspy(update, context):
         await update.message.reply_text("❌ Solo admins")
         return
 
-    users = {u["id"] for u in supabase.table("users").select("id").execute().data}
+    users = {u["uid"] for u in supabase.table("users").select("uid").execute().data}
     members = supabase.table("members").select("*").execute().data
 
     msg = "🕵️ *NO REGISTRADOS*\n\n"
     missing = False
 
     for m in members:
-        if m["id"] not in users:
-            msg += f"• {m['tg']}\n"
+        if m["uid"] not in users:
+            tg = f"@{m['tg']}" if m["tg"] else "(sin username)"
+            msg += f"• {tg}\n"
             missing = True
 
     if not missing:
@@ -150,8 +157,7 @@ tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, tg_app.bot)
+    update = Update.de_json(await req.json(), tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
 
