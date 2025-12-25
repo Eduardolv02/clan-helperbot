@@ -221,15 +221,16 @@ tg_app.add_handler(CommandHandler("pspy", pspy))
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
 # ================= FASTAPI APP =================
-fastapi_app = FastAPI()
+app = FastAPI()
 
-@fastapi_app.post("/webhook")
+@app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.de_json(data, tg_app.bot)
     await tg_app.update_queue.put(update)
     return {"ok": True}
 
-@fastapi_app.on_event("startup")
+@app.on_event("startup")
 async def start_background_tasks():
     tg_app.create_task(energy_job(tg_app))
+
