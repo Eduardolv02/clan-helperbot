@@ -1,20 +1,11 @@
 import os
 import asyncio
 from datetime import datetime
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ChatMemberHandler,
-    ContextTypes,
-    filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ConversationHandler, ChatMemberHandler,
+    ContextTypes, filters
 )
 from supabase import create_client
 from fastapi import FastAPI, Request
@@ -24,7 +15,6 @@ import uvicorn
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://<tu-app>.herokuapp.com/webhook
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -141,7 +131,9 @@ async def war_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def warless(update, key: str, emoji: str):
     users = supabase.table("users").select("*").execute().data
-    votes = {v["tg_id"] for v in supabase.table("war_votes").select("tg_id").execute().data}
+    votes = {
+        v["tg_id"] for v in supabase.table("war_votes").select("tg_id").execute().data
+    }
 
     total = sum(u[key] for u in users if u["tg_id"] not in votes)
     await update.message.reply_text(f"{emoji} Pendiente: {total:,}")
@@ -204,10 +196,9 @@ async def energy_job(app):
             await asyncio.sleep(60)
         await asyncio.sleep(30)
 
-# ================= MAIN =================
-app = ApplicationBuilder().token(TOKEN).build()
+# ================= TELEGRAM BOT APP =================
+tg_app = ApplicationBuilder().token(TOKEN).build()
 
-# Conversation handler
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start), CommandHandler("act", start)],
     states={
@@ -218,34 +209,27 @@ conv = ConversationHandler(
     fallbacks=[]
 )
 
-# Handlers
-app.add_handler(ChatMemberHandler(track_member))
-app.add_handler(conv)
-app.add_handler(CommandHandler("war", war))
-app.add_handler(CommandHandler("warlessa", warlessa))
-app.add_handler(CommandHandler("warlessd", warlessd))
-app.add_handler(CommandHandler("endwar", endwar))
-app.add_handler(CommandHandler("atk", atk))
-app.add_handler(CommandHandler("def", defense))
-app.add_handler(CommandHandler("pspy", pspy))
-app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
+tg_app.add_handler(ChatMemberHandler(track_member))
+tg_app.add_handler(conv)
+tg_app.add_handler(CommandHandler("war", war))
+tg_app.add_handler(CommandHandler("warlessa", warlessa))
+tg_app.add_handler(CommandHandler("warlessd", warlessd))
+tg_app.add_handler(CommandHandler("endwar", endwar))
+tg_app.add_handler(CommandHandler("atk", atk))
+tg_app.add_handler(CommandHandler("def", defense))
+tg_app.add_handler(CommandHandler("pspy", pspy))
+tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
-# FastAPI for webhook
+# ================= FASTAPI APP =================
 fastapi_app = FastAPI()
 
 @fastapi_app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, app.bot)
-    await app.update_queue.put(update)
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.update_queue.put(update)
     return {"ok": True}
 
-# Start background task after app startup
-@app.post("/start_tasks")
-async def start_tasks():
-    app.create_task(energy_job(app))
-    return {"ok": True}
-
-# Run with uvicorn on Heroku
-if __name__ == "__main__":
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+@fastapi_app.on_event("startup")
+async def start_background_tasks():
+    tg_app.create_task(energy_job(tg_app))
