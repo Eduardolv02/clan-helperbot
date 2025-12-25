@@ -17,11 +17,14 @@ from telegram.ext import (
     filters
 )
 from supabase import create_client
+from fastapi import FastAPI, Request
+import uvicorn
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://<tu-app>.herokuapp.com/webhook
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -136,11 +139,9 @@ async def war_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.reply_text("✅ Tropas enviadas")
 
-async def warless(update: Update, key: str, emoji: str):
+async def warless(update, key: str, emoji: str):
     users = supabase.table("users").select("*").execute().data
-    votes = {
-        v["tg_id"] for v in supabase.table("war_votes").select("tg_id").execute().data
-    }
+    votes = {v["tg_id"] for v in supabase.table("war_votes").select("tg_id").execute().data}
 
     total = sum(u[key] for u in users if u["tg_id"] not in votes)
     await update.message.reply_text(f"{emoji} Pendiente: {total:,}")
@@ -206,6 +207,7 @@ async def energy_job(app):
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
+# Conversation handler
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start), CommandHandler("act", start)],
     states={
@@ -216,6 +218,7 @@ conv = ConversationHandler(
     fallbacks=[]
 )
 
+# Handlers
 app.add_handler(ChatMemberHandler(track_member))
 app.add_handler(conv)
 app.add_handler(CommandHandler("war", war))
@@ -227,5 +230,22 @@ app.add_handler(CommandHandler("def", defense))
 app.add_handler(CommandHandler("pspy", pspy))
 app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
-app.create_task(energy_job(app))
-app.run_polling()
+# FastAPI for webhook
+fastapi_app = FastAPI()
+
+@fastapi_app.post("/webhook")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, app.bot)
+    await app.update_queue.put(update)
+    return {"ok": True}
+
+# Start background task after app startup
+@app.post("/start_tasks")
+async def start_tasks():
+    app.create_task(energy_job(app))
+    return {"ok": True}
+
+# Run with uvicorn on Heroku
+if __name__ == "__main__":
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
