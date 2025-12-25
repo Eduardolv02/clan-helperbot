@@ -15,6 +15,7 @@ import uvicorn
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+HEROKU_APP_URL = os.getenv("HEROKU_APP_URL")  # https://your-app.herokuapp.com
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -209,6 +210,7 @@ conv = ConversationHandler(
     fallbacks=[]
 )
 
+# Handlers
 tg_app.add_handler(ChatMemberHandler(track_member))
 tg_app.add_handler(conv)
 tg_app.add_handler(CommandHandler("war", war))
@@ -231,6 +233,17 @@ async def telegram_webhook(req: Request):
     return {"ok": True}
 
 @app.on_event("startup")
-async def start_background_tasks():
+async def startup_event():
+    # Tareas de fondo
     tg_app.create_task(energy_job(tg_app))
+    # Inicializa bot
+    tg_app.create_task(tg_app.initialize())
+    # Configura webhook en Telegram
+    import requests
+    webhook_url = f"{HEROKU_APP_URL}/webhook"
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
 
+# ================= RUN =================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
