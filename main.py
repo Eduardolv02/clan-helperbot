@@ -1,5 +1,4 @@
 import os
-import uvicorn
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -8,24 +7,22 @@ from telegram.ext import (
 )
 from supabase import create_client
 
-# ---------------- CONFIG ----------------
+# ================= ENV =================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-PORT = int(os.getenv("PORT", 8000))
-
-# ---------------- INIT ----------------
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ================= BOT =================
 
 ASK_GUSER, ASK_ATK, ASK_DEF = range(3)
 
-app = FastAPI()
 tg_app = Application.builder().token(BOT_TOKEN).build()
+app = FastAPI()
 
-# ---------------- UTIL ----------------
+# ================= UTIL =================
 
 def parse_power(t: str) -> int:
     t = t.lower().replace(" ", "")
@@ -43,7 +40,7 @@ def get_group_id():
     r = supabase.table("meta").select("value").eq("key", "group_id").execute()
     return int(r.data[0]["value"]) if r.data else None
 
-# ---------------- START ----------------
+# ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["uid"] = str(update.effective_user.id)
@@ -80,7 +77,7 @@ async def get_def(update, context):
     await update.message.reply_text("✅ Registro completado")
     return ConversationHandler.END
 
-# ---------------- WAR ----------------
+# ================= WAR =================
 
 async def war(update, context):
     gid = get_group_id()
@@ -103,7 +100,7 @@ async def war_callback(update, context):
     }).execute()
     await update.callback_query.answer("✅ Tropas enviadas")
 
-# ---------------- PSPY ----------------
+# ================= PSPY =================
 
 async def pspy(update, context):
     gid = get_group_id()
@@ -127,7 +124,7 @@ async def pspy(update, context):
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# ---------------- HANDLERS ----------------
+# ================= HANDLERS =================
 
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
@@ -144,7 +141,7 @@ tg_app.add_handler(CommandHandler("war", war))
 tg_app.add_handler(CommandHandler("pspy", pspy))
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
-# ---------------- WEBHOOK ----------------
+# ================= WEBHOOK =================
 
 @app.post("/webhook")
 async def webhook(req: Request):
@@ -152,17 +149,7 @@ async def webhook(req: Request):
     await tg_app.process_update(update)
     return {"ok": True}
 
+# Health check
 @app.get("/")
 async def root():
     return {"status": "ok"}
-
-# ---------------- ENTRYPOINT ----------------
-# 🔥 ESTO ES LO QUE ARREGLA KOYEB FREE
-
-if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=PORT,
-        log_level="info"
-    )
