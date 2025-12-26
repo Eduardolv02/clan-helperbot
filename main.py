@@ -1,23 +1,13 @@
 import os
 from fastapi import FastAPI, Request
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ConversationHandler, ContextTypes, filters
 )
 from supabase import create_client
 
 # ================= CONFIG =================
-
 TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -27,7 +17,6 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
 
 # ================= UTIL =================
-
 def parse_power(text: str) -> int:
     t = text.lower().replace(" ", "")
     if t.endswith("k"):
@@ -54,7 +43,6 @@ async def is_admin(bot, uid):
     return m.status in ("administrator", "creator")
 
 # ================= TRACK MEMBERS =================
-
 async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or update.message.chat.type == "private":
         return
@@ -63,7 +51,6 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     supabase.table("members").upsert({"uid": uid, "tg": tg}).execute()
 
 # ================= START / ACT =================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         await update.message.reply_text("📩 Escríbeme al privado para registrarte.")
@@ -131,14 +118,11 @@ async def get_def(update, context):
     return ConversationHandler.END
 
 # ================= WAR =================
-
 async def war(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
         return
     supabase.table("users").update({"send": False}).neq("uid", "").execute()
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚔️ Enviar tropas", callback_data="send")]
-    ])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="send")]])
     await update.message.reply_text("🔥 GUERRA INICIADA", reply_markup=kb)
 
 async def war_cb(update, context):
@@ -152,7 +136,6 @@ async def warless(update, key, emoji):
     await update.message.reply_text(f"{emoji} Restante: {total:,}")
 
 # ================= DELETE CON CONFIRMACION =================
-
 async def delete(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
         return
@@ -189,7 +172,6 @@ async def delete_cancel(update, context):
     await update.callback_query.edit_message_text("🚫 Acción cancelada.")
 
 # ================= MENCION BOT =================
-
 async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type == "private":
         return
@@ -216,19 +198,17 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 # ================= APP =================
-
 tg_app = Application.builder().token(TOKEN).build()
 
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start), CommandHandler("act", act)],
     states={
         ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
-        ASK_RACE: [CallbackQueryHandler(get_race)],
+        ASK_RACE: [CallbackQueryHandler(get_race, pattern="^(gato|perro|rana)$")],
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
         ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
-    fallbacks=[],
-    per_message=True
+    fallbacks=[]
 )
 
 # --- HANDLER ORDER CORRECTO ---
@@ -247,7 +227,6 @@ tg_app.add_handler(CallbackQueryHandler(delete_cancel, pattern="cancel"))
 tg_app.add_handler(
     MessageHandler(filters.ChatType.GROUPS & filters.Entity("mention"), mention_bot)
 )
-
 tg_app.add_handler(
     MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_member)
 )
