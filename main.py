@@ -60,6 +60,10 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Tienes un proceso activo. Usa /cancel para reiniciarlo.")
         return ConversationHandler.END
 
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("📩 Por seguridad, este comando solo se puede usar por privado.")
+        return ConversationHandler.END
+
     if not await belongs_to_clan(context.bot, user_id):
         await update.message.reply_text("🚫 No perteneces al clan.")
         return ConversationHandler.END
@@ -80,7 +84,21 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_GUSER
 
 async def get_guser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["guser"] = update.message.text.strip()
+    guser = update.message.text.strip()
+    uid = context.user_data["uid"]
+    context.user_data["guser"] = guser
+
+    if not context.user_data.get("is_act"):
+        supabase.table("users").upsert({
+            "uid": uid,
+            "tg": update.effective_user.username,
+            "guser": guser,
+            "sent_war": False
+        }).execute()
+        check = supabase.table("users").select("guser").eq("uid", uid).execute()
+        if not check.data or check.data[0]["guser"] != guser:
+            await update.message.reply_text("❌ Hubo un error guardando tu nombre. Por favor envíalo de nuevo:")
+            return ASK_GUSER
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🐱 Gato", callback_data="race_gato")],
@@ -100,11 +118,19 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     race = race_map.get(query.data)
     if not race:
-        await query.edit_message_text("❌ Raza inválida.")
-        context.user_data.clear()
-        return ConversationHandler.END
+        await query.edit_message_text("❌ Raza inválida. Intenta de nuevo:")
+        return ASK_RACE
 
     context.user_data["race"] = race
+    uid = context.user_data["uid"]
+
+    if not context.user_data.get("is_act"):
+        supabase.table("users").update({"race": race}).eq("uid", uid).execute()
+        check = supabase.table("users").select("race").eq("uid", uid).execute()
+        if not check.data or check.data[0]["race"] != race:
+            await query.edit_message_text("❌ Hubo un error guardando tu raza. Por favor selecciónala de nuevo:")
+            return ASK_RACE
+
     await query.edit_message_text("⚔️ Ingresa tu ATAQUE:")
     return ASK_ATK
 
@@ -113,7 +139,23 @@ async def get_atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if power is None:
         await update.message.reply_text("❌ Valor inválido. Ej: 120k o 1.5m")
         return ASK_ATK
+
     context.user_data["atk"] = power
+    uid = context.user_data["uid"]
+
+    if context.user_data.get("is_act"):
+        supabase.table("users").update({"atk": power}).eq("uid", uid).execute()
+        check = supabase.table("users").select("atk").eq("uid", uid).execute()
+        if not check.data or check.data[0]["atk"] != power:
+            await update.message.reply_text("❌ Hubo un error actualizando tu ATAQUE. Intenta de nuevo:")
+            return ASK_ATK
+    else:
+        supabase.table("users").update({"atk": power}).eq("uid", uid).execute()
+        check = supabase.table("users").select("atk").eq("uid", uid).execute()
+        if not check.data or check.data[0]["atk"] != power:
+            await update.message.reply_text("❌ Hubo un error guardando tu ATAQUE. Intenta de nuevo:")
+            return ASK_ATK
+
     await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
     return ASK_DEF
 
@@ -125,22 +167,18 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = context.user_data["uid"]
     if context.user_data.get("is_act"):
-        supabase.table("users").update({
-            "atk": context.user_data["atk"],
-            "def": defense,
-            "sent_war": False
-        }).eq("uid", uid).execute()
+        supabase.table("users").update({"def": defense, "sent_war": False}).eq("uid", uid).execute()
+        check = supabase.table("users").select("def").eq("uid", uid).execute()
+        if not check.data or check.data[0]["def"] != defense:
+            await update.message.reply_text("❌ Hubo un error actualizando tu DEFENSA. Intenta de nuevo:")
+            return ASK_DEF
         await update.message.reply_text("✅ Poder actualizado con éxito.")
     else:
-        supabase.table("users").insert({
-            "uid": uid,
-            "tg": update.effective_user.username,
-            "guser": context.user_data["guser"],
-            "race": context.user_data["race"],
-            "atk": context.user_data["atk"],
-            "def": defense,
-            "sent_war": False
-        }).execute()
+        supabase.table("users").update({"def": defense, "sent_war": False}).eq("uid", uid).execute()
+        check = supabase.table("users").select("def").eq("uid", uid).execute()
+        if not check.data or check.data[0]["def"] != defense:
+            await update.message.reply_text("❌ Hubo un error guardando tu DEFENSA. Intenta de nuevo:")
+            return ASK_DEF
         supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
         await update.message.reply_text("✅ Registro completado con éxito.")
 
@@ -158,8 +196,8 @@ async def cancelall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(context.bot, user_id):
         await update.message.reply_text("🚫 Solo admins pueden usar /cancelall.")
         return
-    # Limpiar todos los procesos activos
-    # Esto es un ejemplo, si quieres persistirlo en DB, habría que guardar active_process ahí
+    # Ejemplo: limpiar todos los context.user_data activos
+    # Nota: si quieres persistirlo, habría que guardar active_process en DB
     await update.message.reply_text("⚠️ Todos los procesos activos de los usuarios han sido cancelados.")
 
 # ================= MOSTRAR PODER =================
@@ -227,8 +265,17 @@ tg_app.add_handler(CommandHandler("warlessa", lambda u,c: warless(u,"atk","⚔�
 tg_app.add_handler(CommandHandler("warlessd", lambda u,c: warless(u,"def","🛡")))
 tg_app.add_handler(CommandHandler("endwar", endwar))
 tg_app.add_handler(CommandHandler("cancelall", cancelall))
-
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="^war_send$"))
+
+# ================= MENSAJE AUTOMÁTICO =================
+async def announce_version():
+    gid = get_group_id()
+    if gid:
+        await tg_app.bot.send_message(
+            gid,
+            "⚡ Guerrero, la versión *0.012* del Clan Helper está activa.\n¡Prepara tus tropas y asegura la victoria!",
+            parse_mode="Markdown"
+        )
 
 # --- FASTAPI ---
 app = FastAPI()
@@ -245,3 +292,4 @@ async def startup():
     await tg_app.initialize()
     await tg_app.start()
     print("✅ Bot listo y estable")
+    await announce_version()
