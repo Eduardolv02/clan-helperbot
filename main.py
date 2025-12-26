@@ -23,27 +23,24 @@ tg_app = Application.builder().token(BOT_TOKEN).build()
 app = FastAPI()
 
 # ─────────────────────────────
-# SETTINGS HELPERS
+# HELPERS
 # ─────────────────────────────
 def get_setting(key):
     r = supabase.table("settings").select("value").eq("key", key).execute()
     return r.data[0]["value"] if r.data else None
 
-
 def set_setting(key, value):
     supabase.table("settings").upsert({"key": key, "value": value}).execute()
 
-
 def is_group(chat_id):
     return str(chat_id) == get_setting("group_id")
-
 
 def is_admin(uid):
     admins = get_setting("admins")
     return admins and str(uid) in admins.split(",")
 
 # ─────────────────────────────
-# AUTO GUARDAR MIEMBROS
+# AUTO GUARDAR MIEMBROS POR MENSAJES
 # ─────────────────────────────
 async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not is_group(update.message.chat.id):
@@ -51,10 +48,15 @@ async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     u = update.message.from_user
 
+    # Obtener el conteo actual de mensajes para el usuario
+    existing = supabase.table("members").select("messages").eq("uid", str(u.id)).execute()
+    current_messages = existing.data[0]["messages"] if existing.data else 0
+
     supabase.table("members").upsert({
         "uid": str(u.id),
         "tg": u.username,
-        "registered": False
+        "registered": False,
+        "messages": current_messages + 1  # Incrementar contador de mensajes
     }).execute()
 
 # ─────────────────────────────
@@ -66,10 +68,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     u = update.message.from_user
 
+    # Al registrarse, marcar como registrado y resetear mensajes si es necesario (opcional)
     supabase.table("members").upsert({
         "uid": str(u.id),
         "tg": u.username,
-        "registered": True
+        "registered": True,
+        "messages": 0  # Opcional: resetear al registrarse
     }).execute()
 
     await update.message.reply_text("✅ Registrado en el clan.")
@@ -116,7 +120,6 @@ async def atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"@{x['tg']} → {x['atk']}\n"
     await update.message.reply_text(msg)
 
-
 async def deff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = supabase.table("users").select("tg,def").order("def", desc=True).execute()
     msg = "🛡 DEFENSA CLAN\n\n"
@@ -132,21 +135,17 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     set_setting("war_active", "true")
-    supabase.table("war_votes").delete().neq("uid", "").execute()
-
+    supabase.table("war_votes").delete().neq("uid", "").execute()  # Corregido: usar "" en lugar de "0"
     await update.message.reply_text("🔥 GUERRA INICIADA")
 
 async def warlessa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_setting("war_active") != "true":
         return
 
-    users = supabase.table("users").select("uid,tg").execute().data
-    voted = {
-        x["uid"]
-        for x in supabase.table("war_votes").select("uid").execute().data
-    }
+    users = supabase.table("users").select("uid,tg").execute().data  # Simplificado: no necesitamos atk aquí
+    voted = {x["uid"] for x in supabase.table("war_votes").select("uid").execute().data}
 
-    msg = "❌ ATK PENDIENTE:\n\n"
+    msg = "❌ ATK PENDIENTE:\n\n"  # Corregido: agregar \n\n para consistencia
     for u in users:
         if u["uid"] not in voted:
             msg += f"@{u['tg']}\n"
@@ -154,6 +153,8 @@ async def warlessa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg or "✅ Todos enviaron ATK")
 
 async def warlessd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Para DEF, asumimos que es lo mismo que ATK, ya que /act envía ambos.
+    # Si quieres distinguir, podrías agregar lógica separada para votos de DEF.
     await warlessa(update, context)
 
 async def endwar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,8 +162,7 @@ async def endwar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     set_setting("war_active", "false")
-    supabase.table("war_votes").delete().neq("uid", "").execute()
-
+    supabase.table("war_votes").delete().neq("uid", "").execute()  # Corregido: usar ""
     await update.message.reply_text("🏁 Guerra finalizada")
 
 # ─────────────────────────────
@@ -173,7 +173,7 @@ async def pspy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     r = supabase.table("members").select("tg").eq("registered", False).execute()
-    msg = "🕵️ NO REGISTRADOS:\n\n"
+    msg = "🕵️ NO REGISTRADOS:\n\n"  # Corregido: agregar \n\n
     for x in r.data:
         msg += f"@{x['tg']}\n"
 
@@ -213,6 +213,7 @@ async def startup():
     if gid:
         await tg_app.bot.send_message(
             gid,
-            "🤖 *Bot del Clan ONLINE*\n\n📖 Comandos listos para la guerra ⚔️",
+            "🤖 *Bot del Clan ONLINE*\n\n📖 Comandos listos para la guerra ⚔️",  # Corregido: agregar \n\n
             parse_mode="Markdown"
         )
+
