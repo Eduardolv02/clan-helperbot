@@ -182,6 +182,15 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
     return ASK_ATK
 
+# ================= FALLBACKS PARA SEGURIDAD =================
+
+async def invalid_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Envía los datos en el orden correcto. Usa /start o /act para reiniciar.")
+
+async def timeout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏰ Tiempo agotado. La conversación se canceló. Usa /start o /act para intentarlo de nuevo.")
+    return ConversationHandler.END
+
 # ================= WAR =================
 
 async def war(update, context):
@@ -268,7 +277,12 @@ conv = ConversationHandler(
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
         ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
-    fallbacks=[]
+    fallbacks=[
+        MessageHandler(filters.ALL, invalid_input),  # Para mensajes inválidos
+        CommandHandler("cancel", timeout_handler)  # Opcional: /cancel para cancelar manualmente
+    ],
+    conversation_timeout=180,  # 3 minutos
+    per_message=True
 )
 
 tg_app.add_handler(conv)
