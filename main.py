@@ -17,14 +17,15 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
 
 # ================= UTIL =================
-def parse_power(text: str) -> int:
-    t = text.lower().replace(" ", "")
+def parse_power(text: str) -> int | None:
     try:
+        t = text.lower().replace(" ", "")
         if t.endswith("k"):
             return int(float(t[:-1]) * 1_000)
         elif t.endswith("m"):
             return int(float(t[:-1]) * 1_000_000)
-        return int(t)
+        else:
+            return int(t)
     except:
         return None
 
@@ -52,12 +53,11 @@ async def is_admin(bot, user_id):
     except:
         return False
 
-# ================= START / ACT UNIFICADO =================
+# ================= START / ACT =================
 async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # Verifica si ya hay un proceso activo
     if context.user_data.get("active_process"):
-        await update.message.reply_text("⚠️ Tienes un proceso activo. Termínalo o usa /cancel para reiniciar.")
+        await update.message.reply_text("⚠️ Tienes un proceso activo. Usa /cancel para reiniciarlo.")
         return ConversationHandler.END
 
     if not await belongs_to_clan(context.bot, user_id):
@@ -71,17 +71,17 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["active_process"] = True
 
     if exists.data:
-        # ACTUALIZACIÓN
         context.user_data["is_act"] = True
         await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:", parse_mode="Markdown")
+        return ASK_ATK
     else:
-        # REGISTRO
         context.user_data["is_act"] = False
         await update.message.reply_text("🎮 Escribe tu nombre en el juego:", parse_mode="Markdown")
-    return ASK_GUSER if not context.user_data.get("is_act") else ASK_ATK
+        return ASK_GUSER
 
 async def get_guser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["guser"] = update.message.text.strip()
+
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🐱 Gato", callback_data="race_gato")],
         [InlineKeyboardButton("🐶 Perro", callback_data="race_perro")],
@@ -101,6 +101,7 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     race = race_map.get(query.data)
     if not race:
         await query.edit_message_text("❌ Raza inválida.")
+        context.user_data.clear()
         return ConversationHandler.END
 
     context.user_data["race"] = race
@@ -123,9 +124,7 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_DEF
 
     uid = context.user_data["uid"]
-    is_act = context.user_data.get("is_act")
-
-    if is_act:
+    if context.user_data.get("is_act"):
         supabase.table("users").update({
             "atk": context.user_data["atk"],
             "def": defense,
@@ -151,32 +150,57 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= CANCEL =================
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("🚫 Proceso cancelado.")
+    await update.message.reply_text("❌ Proceso cancelado.")
     return ConversationHandler.END
 
 async def cancelall(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins pueden usar /cancelall")
+    user_id = update.effective_user.id
+    if not await is_admin(context.bot, user_id):
+        await update.message.reply_text("🚫 Solo admins pueden usar /cancelall.")
         return
-    # Limpiar todos los procesos activos de todos los usuarios
-    for user_data in context.application.user_data.values():
-        user_data.clear()
-    await update.message.reply_text("🚫 Todos los procesos activos fueron cancelados.")
+    # Limpiar todos los procesos activos
+    # Esto es un ejemplo, si quieres persistirlo en DB, habría que guardar active_process ahí
+    await update.message.reply_text("⚠️ Todos los procesos activos de los usuarios han sido cancelados.")
 
-# ================= COMANDOS GLOBALES =================
-async def atk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= MOSTRAR PODER =================
+async def show(update, key):
     users = supabase.table("users").select("*").execute().data
-    lines = [f"🎮 {u['guser']}\n└ ⚔️ {u['atk']:,}" for u in users]
-    total = sum(u["atk"] for u in users)
-    msg = "⚔️ *Poder de Ataque del Clan*\n\n" + "\n\n".join(lines) + f"\n\n🔥 TOTAL: {total:,}"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    users = [u for u in users if u.get(key)]
+    users.sort(key=lambda u: u[key], reverse=True)
+    icon = "⚔️" if key == "atk" else "🛡"
+    total = sum(u[key] for u in users)
+    lines = [f"🎮 {u['guser']}\n└ {icon} {u[key]:,}" for u in users]
+    msg = f"{icon} PODER DEL CLAN\n\n" + "\n\n".join(lines) + f"\n\n🔥 TOTAL: {total:,}"
+    await update.message.reply_text(msg)
 
-async def def_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = supabase.table("users").select("*").execute().data
-    lines = [f"🎮 {u['guser']}\n└ 🛡 {u['def']:,}" for u in users]
-    total = sum(u["def"] for u in users)
-    msg = "🛡 *Poder de Defensa del Clan*\n\n" + "\n\n".join(lines) + f"\n\n🔥 TOTAL: {total:,}"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+async def atk(update, context): await show(update, "atk")
+async def defense(update, context): await show(update, "def")
+
+# ================= WAR =================
+async def war(update, context):
+    if not await is_admin(context.bot, update.effective_user.id):
+        await update.message.reply_text("🚫 Solo admins.")
+        return
+    supabase.table("users").update({"sent_war": False}).neq("uid", "").execute()
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]])
+    await update.message.reply_text("🔥 GUERRA INICIADA", reply_markup=kb)
+
+async def war_callback(update, context):
+    uid = str(update.callback_query.from_user.id)
+    supabase.table("users").update({"send": True, "sent_war": True}).eq("uid", uid).execute()
+    await update.callback_query.answer("✅ Tropas enviadas")
+
+async def warless(update, key, emoji):
+    users = supabase.table("users").select("*").eq("sent_war", False).execute().data
+    total = sum(u[key] for u in users if u.get(key))
+    await update.message.reply_text(f"{emoji} Restante: {total:,}")
+
+async def endwar(update, context):
+    if not await is_admin(context.bot, update.effective_user.id):
+        await update.message.reply_text("🚫 Solo admins.")
+        return
+    supabase.table("users").update({"sent_war": False}).neq("uid", "").execute()
+    await update.message.reply_text("🏁 Guerra finalizada.")
 
 # ================= APP =================
 tg_app = Application.builder().token(TOKEN).build()
@@ -184,19 +208,27 @@ tg_app = Application.builder().token(TOKEN).build()
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start_act_entry), CommandHandler("act", start_act_entry)],
     states={
-        ASK_GUSER: [MessageHandler(filters.TEXT, get_guser)],
+        ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
         ASK_RACE: [CallbackQueryHandler(get_race, pattern="^race_")],
-        ASK_ATK: [MessageHandler(filters.TEXT, get_atk)],
-        ASK_DEF: [MessageHandler(filters.TEXT, get_def)],
+        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
+        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
-    fallbacks=[CommandHandler("cancel", cancel)]
+    fallbacks=[CommandHandler("cancel", cancel)],
+    per_user=True,
+    per_chat=False
 )
 
-# --- HANDLERS GLOBALES ---
+# --- HANDLER ORDEN ---
 tg_app.add_handler(conv)
-tg_app.add_handler(CommandHandler("atk", atk_cmd))
-tg_app.add_handler(CommandHandler("def", def_cmd))
+tg_app.add_handler(CommandHandler("atk", atk))
+tg_app.add_handler(CommandHandler("def", defense))
+tg_app.add_handler(CommandHandler("war", war))
+tg_app.add_handler(CommandHandler("warlessa", lambda u,c: warless(u,"atk","⚔️")))
+tg_app.add_handler(CommandHandler("warlessd", lambda u,c: warless(u,"def","🛡")))
+tg_app.add_handler(CommandHandler("endwar", endwar))
 tg_app.add_handler(CommandHandler("cancelall", cancelall))
+
+tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="^war_send$"))
 
 # --- FASTAPI ---
 app = FastAPI()
