@@ -1,265 +1,175 @@
 import os
+import logging
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from supabase import create_client
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters
 )
 
-# ─────────────────────────────
-# ENV
-# ─────────────────────────────
+# ================= CONFIG =================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://xxxx.koyeb.app
+GROUP_ID = int(os.getenv("GROUP_ID"))
 
+bot = Bot(BOT_TOKEN)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-tg_app = Application.builder().token(BOT_TOKEN).build()
+logging.basicConfig(level=logging.INFO)
+
+# ================= APP =================
+
 app = FastAPI()
+application = Application.builder().token(BOT_TOKEN).build()
 
-# ─────────────────────────────
-# HELPERS
-# ─────────────────────────────
-def get_setting(key):
-    r = supabase.table("settings").select("value").eq("key", key).execute()
-    return r.data[0]["value"] if r.data else None
+# ================= HELPERS =================
 
+async def ensure_member(update: Update):
+    uid = str(update.effective_user.id)
+    tg = update.effective_user.username or update.effective_user.full_name
 
-def set_setting(key, value):
-    supabase.table("settings").upsert({"key": key, "value": value}).execute()
-
-
-def is_group(chat_id):
-    gid = get_setting("group_id")
-    return gid and str(chat_id) == gid
-
-
-def is_admin(uid):
-    admins = get_setting("admins")
-    return admins and str(uid) in admins.split(",")
-
-
-def save_member(uid, tg, registered=False):
     supabase.table("members").upsert({
-        "uid": str(uid),
+        "uid": uid,
         "tg": tg,
-        "registered": registered
+        "registered": False
     }).execute()
 
+# ================= COMMANDS =================
 
-def mark_registered(uid):
-    supabase.table("members").update(
-        {"registered": True}
-    ).eq("uid", str(uid)).execute()
-
-
-# ─────────────────────────────
-# CAPTURA DE MENSAJES (MIEMBROS)
-# ─────────────────────────────
-async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    chat_id = update.message.chat.id
-
-    if not is_group(chat_id):
-        return
-
-    u = update.message.from_user
-    save_member(u.id, u.username, False)
-
-
-# ─────────────────────────────
-# NUEVOS MIEMBROS AL GRUPO
-# ─────────────────────────────
-async def capture_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.new_chat_members:
-        return
-
-    if not is_group(update.message.chat.id):
-        return
-
-    for u in update.message.new_chat_members:
-        save_member(u.id, u.username, False)
-
-
-# ─────────────────────────────
-# /start – REGISTRO
-# ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_group(update.message.chat.id):
-        return
+    await ensure_member(update)
 
-    u = update.message.from_user
-
-    save_member(u.id, u.username, True)
-    mark_registered(u.id)
-
-    await update.message.reply_text("✅ Registrado en el clan.")
-
-
-# ─────────────────────────────
-# /act – ACTUALIZAR STATS
-# ─────────────────────────────
-async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_group(update.message.chat.id):
-        return
-
-    if len(context.args) != 2:
-        await update.message.reply_text("Uso: /act ATK DEF")
-        return
-
-    try:
-        atk = int(context.args[0])
-        deff = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("ATK y DEF deben ser números.")
-        return
-
-    u = update.message.from_user
+    uid = str(update.effective_user.id)
+    tg = update.effective_user.username or update.effective_user.full_name
 
     supabase.table("users").upsert({
-        "uid": str(u.id),
-        "tg": u.username,
-        "atk": atk,
-        "def": deff
+        "uid": uid,
+        "tg": tg,
+        "atk": 0,
+        "def": 0
     }).execute()
 
-    mark_registered(u.id)
+    supabase.table("members").update({
+        "registered": True
+    }).eq("uid", uid).execute()
+
+    await update.message.reply_text("✅ Registro completado. Usa /act para actualizar stats.")
+
+async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    try:
+        atk = int(context.args[0])
+        df = int(context.args[1])
+    except:
+        await update.message.reply_text("❌ Uso: /act ATK DEF")
+        return
+
+    supabase.table("users").update({
+        "atk": atk,
+        "def": df
+    }).eq("uid", uid).execute()
 
     await update.message.reply_text("📊 Stats actualizados.")
 
-
-# ─────────────────────────────
-# /atk /def – CLAN
-# ─────────────────────────────
 async def atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    r = supabase.table("users").select("tg,atk").order("atk", desc=True).execute()
-    msg = "⚔️ ATAQUE CLAN\n\n"
-    for x in r.data:
-        msg += f"@{x['tg']} → {x['atk']}\n"
+    rows = supabase.table("users").select("tg,atk").execute().data
+    msg = "📊 ATK DEL CLAN\n\n"
+    for r in rows:
+        msg += f"{r['tg']}: {r['atk']}\n"
     await update.message.reply_text(msg)
 
-
-async def deff(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    r = supabase.table("users").select("tg,def").order("def", desc=True).execute()
-    msg = "🛡 DEFENSA CLAN\n\n"
-    for x in r.data:
-        msg += f"@{x['tg']} → {x['def']}\n"
+async def def_(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = supabase.table("users").select("tg,def").execute().data
+    msg = "📊 DEF DEL CLAN\n\n"
+    for r in rows:
+        msg += f"{r['tg']}: {r['def']}\n"
     await update.message.reply_text(msg)
 
-
-# ─────────────────────────────
-# WAR SYSTEM
-# ─────────────────────────────
 async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        return
-
-    set_setting("war_active", "true")
-    supabase.table("war_votes").delete().neq("uid", "0").execute()
-
-    await update.message.reply_text("🔥 GUERRA INICIADA")
-
+    supabase.table("war_votes").delete().neq("uid", "").execute()
+    await update.message.reply_text("⚔️ Guerra iniciada. Envíen /act")
 
 async def warlessa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if get_setting("war_active") != "true":
-        return
-
-    users = supabase.table("users").select("uid,tg").execute().data
-    voted = {x["uid"] for x in supabase.table("war_votes").select("uid").execute().data}
-
-    msg = "❌ ATK pendiente:\n\n"
+    users = supabase.table("users").select("uid,tg,atk").execute().data
+    msg = "⚔️ ATK PENDIENTE\n\n"
     for u in users:
-        if u["uid"] not in voted:
-            msg += f"@{u['tg']}\n"
-
+        if not u["atk"]:
+            msg += f"{u['tg']}\n"
     await update.message.reply_text(msg or "✅ Todos enviaron ATK")
 
-
 async def warlessd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await warlessa(update, context)
-
+    users = supabase.table("users").select("uid,tg,def").execute().data
+    msg = "⚔️ DEF PENDIENTE\n\n"
+    for u in users:
+        if not u["def"]:
+            msg += f"{u['tg']}\n"
+    await update.message.reply_text(msg or "✅ Todos enviaron DEF")
 
 async def endwar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        return
+    supabase.table("war_votes").delete().neq("uid", "").execute()
+    await update.message.reply_text("🏁 Guerra finalizada.")
 
-    set_setting("war_active", "false")
-    supabase.table("war_votes").delete().neq("uid", "0").execute()
-
-    await update.message.reply_text("🏁 Guerra finalizada")
-
-
-# ─────────────────────────────
-# /pspy – NO REGISTRADOS
-# ─────────────────────────────
 async def pspy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.message.from_user.id):
-        return
+    rows = supabase.table("members").select("tg").eq("registered", False).execute().data
+    msg = "🕵️ No registrados:\n\n"
+    for r in rows:
+        msg += f"{r['tg']}\n"
+    await update.message.reply_text(msg or "✅ Todos registrados")
 
-    r = supabase.table("members").select("tg").eq("registered", False).execute()
+# ================= HANDLERS =================
 
-    if not r.data:
-        await update.message.reply_text("✅ Todos están registrados")
-        return
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("act", act))
+application.add_handler(CommandHandler("atk", atk))
+application.add_handler(CommandHandler("def", def_))
+application.add_handler(CommandHandler("war", war))
+application.add_handler(CommandHandler("warlessa", warlessa))
+application.add_handler(CommandHandler("warlessd", warlessd))
+application.add_handler(CommandHandler("endwar", endwar))
+application.add_handler(CommandHandler("pspy", pspy))
 
-    msg = "🕵️ NO REGISTRADOS:\n\n"
-    for x in r.data:
-        if x["tg"]:
-            msg += f"@{x['tg']}\n"
+# ================= WEBHOOK =================
 
-    await update.message.reply_text(msg)
-
-
-# ─────────────────────────────
-# HANDLERS
-# ─────────────────────────────
-tg_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, capture_new_members))
-tg_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, capture_member))
-
-tg_app.add_handler(CommandHandler("start", start))
-tg_app.add_handler(CommandHandler("act", act))
-tg_app.add_handler(CommandHandler("atk", atk))
-tg_app.add_handler(CommandHandler("def", deff))
-tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", warlessa))
-tg_app.add_handler(CommandHandler("warlessd", warlessd))
-tg_app.add_handler(CommandHandler("endwar", endwar))
-tg_app.add_handler(CommandHandler("pspy", pspy))
-
-
-# ─────────────────────────────
-# WEBHOOK
-# ─────────────────────────────
 @app.post("/webhook")
 async def webhook(req: Request):
-    update = Update.de_json(await req.json(), tg_app.bot)
-    await tg_app.process_update(update)
+    data = await req.json()
+    await application.process_update(Update.de_json(data, bot))
     return {"ok": True}
 
+# ================= STARTUP =================
 
-@app.on_event("startup")
-async def startup():
-    await tg_app.bot.initialize()
-    await tg_app.initialize()
-    await tg_app.start()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await application.initialize()
+    await bot.set_webhook(
+        url=f"{WEBHOOK_URL}/webhook",
+        allowed_updates=["message"]  # 🔴 CLAVE
+    )
 
-    if WEBHOOK_URL:
-        await tg_app.bot.set_webhook(WEBHOOK_URL)
-
-    gid = get_setting("group_id")
-    if gid:
-        await tg_app.bot.send_message(
-            int(gid),
-            "🤖 *Bot del Clan ONLINE*\n\nListo para la guerra ⚔️",
-            parse_mode="Markdown"
+    await bot.send_message(
+        chat_id=GROUP_ID,
+        text=(
+            "🤖 **BOT DEL CLAN ACTIVO**\n\n"
+            "📖 COMANDOS DEL CLAN\n\n"
+            "📋 /start – Registro\n"
+            "📋 /act – Actualizar stats\n\n"
+            "📊 /atk – Ataque clan\n"
+            "📊 /def – Defensa clan\n\n"
+            "⚔️ /war – Iniciar guerra\n"
+            "⚔️ /warlessa – ATK pendiente\n"
+            "⚔️ /warlessd – DEF pendiente\n"
+            "⚔️ /endwar – Finalizar\n\n"
+            "🕵️ /pspy – No registrados"
         )
+    )
 
-    print("🤖 Bot activo y escuchando")
+    yield
+    await application.shutdown()
+
+app.router.lifespan_context = lifespan
