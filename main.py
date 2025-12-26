@@ -16,6 +16,7 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -35,7 +36,8 @@ def set_setting(key, value):
 
 
 def is_group(chat_id):
-    return str(chat_id) == get_setting("group_id")
+    gid = get_setting("group_id")
+    return gid and str(chat_id) == gid
 
 
 def is_admin(uid):
@@ -58,22 +60,13 @@ def mark_registered(uid):
 
 
 # ─────────────────────────────
-# AUTO GUARDAR MIEMBROS (MENSAJES)
+# CAPTURA DE MENSAJES (MIEMBROS)
 # ─────────────────────────────
 async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
 
     chat_id = update.message.chat.id
-
-    # Guardar group_id automáticamente la primera vez
-    if not get_setting("group_id"):
-        set_setting("group_id", str(chat_id))
-        await update.message.reply_text(
-            "🤖 *Bot del Clan ACTIVADO*\n\n"
-            "Listo para registrar guerreros ⚔️",
-            parse_mode="Markdown"
-        )
 
     if not is_group(chat_id):
         return
@@ -83,7 +76,7 @@ async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────
-# AUTO GUARDAR NUEVOS MIEMBROS
+# NUEVOS MIEMBROS AL GRUPO
 # ─────────────────────────────
 async def capture_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.new_chat_members:
@@ -97,7 +90,7 @@ async def capture_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ─────────────────────────────
-# /start
+# /start – REGISTRO
 # ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_group(update.message.chat.id):
@@ -112,17 +105,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────
-# /act atk def
+# /act – ACTUALIZAR STATS
 # ─────────────────────────────
 async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_group(update.message.chat.id):
         return
 
+    if len(context.args) != 2:
+        await update.message.reply_text("Uso: /act ATK DEF")
+        return
+
     try:
         atk = int(context.args[0])
         deff = int(context.args[1])
-    except:
-        await update.message.reply_text("Uso: /act ATK DEF")
+    except ValueError:
+        await update.message.reply_text("ATK y DEF deben ser números.")
         return
 
     u = update.message.from_user
@@ -140,7 +137,7 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────
-# /atk /def
+# /atk /def – CLAN
 # ─────────────────────────────
 async def atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = supabase.table("users").select("tg,atk").order("atk", desc=True).execute()
@@ -159,7 +156,7 @@ async def deff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────
-# WAR SYSTEM (SIN TOCAR)
+# WAR SYSTEM
 # ─────────────────────────────
 async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
@@ -167,6 +164,7 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     set_setting("war_active", "true")
     supabase.table("war_votes").delete().neq("uid", "0").execute()
+
     await update.message.reply_text("🔥 GUERRA INICIADA")
 
 
@@ -177,11 +175,12 @@ async def warlessa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = supabase.table("users").select("uid,tg").execute().data
     voted = {x["uid"] for x in supabase.table("war_votes").select("uid").execute().data}
 
-    msg = "❌ ATK pendiente:\n"
+    msg = "❌ ATK pendiente:\n\n"
     for u in users:
         if u["uid"] not in voted:
             msg += f"@{u['tg']}\n"
-    await update.message.reply_text(msg)
+
+    await update.message.reply_text(msg or "✅ Todos enviaron ATK")
 
 
 async def warlessd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,21 +193,28 @@ async def endwar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     set_setting("war_active", "false")
     supabase.table("war_votes").delete().neq("uid", "0").execute()
+
     await update.message.reply_text("🏁 Guerra finalizada")
 
 
 # ─────────────────────────────
-# /pspy
+# /pspy – NO REGISTRADOS
 # ─────────────────────────────
 async def pspy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
         return
 
     r = supabase.table("members").select("tg").eq("registered", False).execute()
+
+    if not r.data:
+        await update.message.reply_text("✅ Todos están registrados")
+        return
+
     msg = "🕵️ NO REGISTRADOS:\n\n"
     for x in r.data:
         if x["tg"]:
             msg += f"@{x['tg']}\n"
+
     await update.message.reply_text(msg)
 
 
@@ -216,7 +222,7 @@ async def pspy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # HANDLERS
 # ─────────────────────────────
 tg_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, capture_new_members))
-tg_app.add_handler(MessageHandler(filters.ALL, capture_member))
+tg_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, capture_member))
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("act", act))
@@ -241,5 +247,19 @@ async def webhook(req: Request):
 
 @app.on_event("startup")
 async def startup():
+    await tg_app.bot.initialize()
     await tg_app.initialize()
-    print("🤖 Bot listo")
+    await tg_app.start()
+
+    if WEBHOOK_URL:
+        await tg_app.bot.set_webhook(WEBHOOK_URL)
+
+    gid = get_setting("group_id")
+    if gid:
+        await tg_app.bot.send_message(
+            int(gid),
+            "🤖 *Bot del Clan ONLINE*\n\nListo para la guerra ⚔️",
+            parse_mode="Markdown"
+        )
+
+    print("🤖 Bot activo y escuchando")
