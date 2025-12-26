@@ -87,6 +87,7 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= START / REGISTRO =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: /start called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text(
             "🚫 *Acceso denegado*\n\n"
@@ -172,6 +173,7 @@ async def get_def(update, context):
 # ================= ACT (SOLO ATK Y DEF) =================
 
 async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: /act called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo miembros del clan", parse_mode="Markdown")
         return ConversationHandler.END
@@ -190,6 +192,7 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= WAR =================
 
 async def war(update, context):
+    print(f"DEBUG: /war called in chat {update.message.chat.id}")  # Debug
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins", parse_mode="Markdown")
         return
@@ -236,6 +239,7 @@ async def endwar(update, context):
 # ================= LISTAS (/ATK /DEF) =================
 
 async def show(update, key):
+    print(f"DEBUG: /{'atk' if key == 'atk' else 'def'} called in chat {update.message.chat.id}")  # Debug
     # Obtener usuarios registrados
     members_registered = {m["uid"] for m in supabase.table("members").select("uid").eq("registered", True).execute().data}
     users = [u for u in supabase.table("users").select("*").execute().data if u["uid"] in members_registered]
@@ -269,6 +273,7 @@ async def defense(update, context):
 # ================= PSPY =================
 
 async def pspy(update, context):
+    print(f"DEBUG: /pspy called in chat {update.message.chat.id}")  # Debug
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins", parse_mode="Markdown")
         return
@@ -331,7 +336,8 @@ conv = ConversationHandler(
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
         ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
-    fallbacks=[]
+    fallbacks=[],
+    per_message=True  # Silencia warnings
 )
 
 tg_app.add_handler(ChatMemberHandler(track_member))
@@ -352,13 +358,15 @@ app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    update = Update.de_json(await req.json(), tg_app.bot)
+    data = await req.json()
+    print(f"DEBUG: Received update: {data}")  # Debug
+    update = Update.de_json(data, tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
 
 @app.on_event("startup")
 async def startup():
     await tg_app.initialize()
-    await tg_app.bot.set_webhook(WEBHOOK_URL)
+    # Removido: await tg_app.bot.set_webhook(WEBHOOK_URL)  # No lo necesitas aquí
     tg_app.create_task(energy_job(tg_app))
     print("✅ Bot iniciado correctamente")
