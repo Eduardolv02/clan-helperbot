@@ -57,28 +57,9 @@ async def is_admin(bot, user_id):
     m = await bot.get_chat_member(gid, user_id)
     return m.status in ("administrator", "creator")
 
-# ================= TRACKER DE MENSAJES =================
-
-async def track_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or update.message.chat.id != get_group_id():
-        return
-
-    u = update.message.from_user
-    uid = str(u.id)
-
-    print(f"DEBUG: Tracking message from {u.username or u.first_name} (UID: {uid})")  # Debug
-
-    # Upsert en members: guarda uid, tg, registered=False si no existe
-    supabase.table("members").upsert({
-        "uid": uid,
-        "tg": u.username or u.first_name,
-        "registered": False  # No cambia si ya está True
-    }).execute()
-
 # ================= START / REGISTRO =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"DEBUG: /start called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Usted no pertenece al clan.")
         return ConversationHandler.END
@@ -153,7 +134,6 @@ async def get_def(update, context):
 # ================= ACT =================
 
 async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"DEBUG: /act called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo miembros del clan.")
         return ConversationHandler.END
@@ -171,7 +151,6 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= WAR =================
 
 async def war(update, context):
-    print(f"DEBUG: /war called in chat {update.message.chat.id}")  # Debug
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
@@ -215,7 +194,6 @@ async def endwar(update, context):
 # ================= LISTAS =================
 
 async def show(update, key):
-    print(f"DEBUG: /{'atk' if key == 'atk' else 'def'} called in chat {update.message.chat.id}")  # Debug
     members_registered = {m["uid"] for m in supabase.table("members").select("uid").eq("registered", True).execute().data}
     users = [u for u in supabase.table("users").select("*").execute().data if u["uid"] in members_registered]
     
@@ -235,27 +213,6 @@ async def atk(update, context):
 async def defense(update, context):
     await show(update, "def")
 
-# ================= SPY =================
-
-async def spy(update, context):
-    print(f"DEBUG: /spy called in chat {update.message.chat.id}")  # Debug
-    if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins.")
-        return
-
-    members = supabase.table("members").select("*").execute().data
-    no_reg = [m for m in members if not m["registered"]]
-
-    if not no_reg:
-        await update.message.reply_text("✅ Todos registrados.")
-        return
-
-    msg = "🕵️ NO REGISTRADOS:\n\n"
-    for m in no_reg:
-        msg += f"• @{m['tg']}\n"
-
-    await update.message.reply_text(msg)
-
 # ================= APP =================
 
 tg_app = Application.builder().token(TOKEN).build()
@@ -271,7 +228,6 @@ conv = ConversationHandler(
     fallbacks=[]
 )
 
-tg_app.add_handler(MessageHandler(filters.ALL, track_messages))  # Tracker de mensajes
 tg_app.add_handler(conv)
 tg_app.add_handler(CommandHandler("atk", atk))
 tg_app.add_handler(CommandHandler("def", defense))
@@ -279,20 +235,17 @@ tg_app.add_handler(CommandHandler("war", war))
 tg_app.add_handler(CommandHandler("warlessa", warlessa))
 tg_app.add_handler(CommandHandler("warlessd", warlessd))
 tg_app.add_handler(CommandHandler("endwar", endwar))
-tg_app.add_handler(CommandHandler("spy", spy))  # Comando /spy
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
 app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    data = await req.json()
-    print(f"DEBUG: Received update: {data}")  # Debug
-    update = Update.de_json(data, tg_app.bot)
+    update = Update.de_json(await req.json(), tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
 
 @app.on_event("startup")
 async def startup():
     await tg_app.initialize()
-    print("✅ Bot listo")s
+    print("✅ Bot listo")
