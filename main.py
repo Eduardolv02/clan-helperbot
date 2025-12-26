@@ -1,18 +1,10 @@
 import os
 from fastapi import FastAPI, Request
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ConversationHandler,
+    ContextTypes, filters
 )
 from supabase import create_client
 
@@ -37,40 +29,39 @@ def parse_power(text: str) -> int:
     return int(t)
 
 def get_group_id():
-    res = supabase.table("settings").select("value").eq("key", "group_id").execute()
-    return int(res.data[0]["value"]) if res.data else None
+    r = supabase.table("settings").select("value").eq("key", "group_id").execute()
+    return int(r.data[0]["value"]) if r.data else None
 
-async def belongs_to_clan(bot, user_id):
+async def belongs(bot, uid):
     gid = get_group_id()
     if not gid:
         return False
     try:
-        m = await bot.get_chat_member(gid, user_id)
+        m = await bot.get_chat_member(gid, uid)
         return m.status in ("member", "administrator", "creator")
     except:
         return False
 
-async def is_admin(bot, user_id):
+async def is_admin(bot, uid):
     gid = get_group_id()
     if not gid:
         return False
-    m = await bot.get_chat_member(gid, user_id)
+    m = await bot.get_chat_member(gid, uid)
     return m.status in ("administrator", "creator")
 
-# ================= START =================
+# ================= /start =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await update.message.reply_text("📩 Escríbeme al privado para registrarte.")
         return ConversationHandler.END
 
-    if not await belongs_to_clan(context.bot, update.effective_user.id):
+    if not await belongs(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 No perteneces al clan.")
         return ConversationHandler.END
 
     uid = str(update.effective_user.id)
     exists = supabase.table("users").select("uid").eq("uid", uid).execute()
-
     if exists.data:
         await update.message.reply_text("✅ Ya estás registrado.")
         return ConversationHandler.END
@@ -81,7 +72,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎮 Escribe tu nombre en el juego:")
     return ASK_GUSER
 
-async def get_guser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_guser(update, context):
     context.user_data["guser"] = update.message.text.strip()
 
     kb = InlineKeyboardMarkup([
@@ -93,7 +84,7 @@ async def get_guser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏹 Selecciona tu RAZA:", reply_markup=kb)
     return ASK_RACE
 
-async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_race(update, context):
     q = update.callback_query
     await q.answer()
 
@@ -112,67 +103,24 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("⚔️ Ingresa tu ATAQUE:")
     return ASK_ATK
 
-# ================= ACT =================
-
-async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != "private":
-        await update.message.reply_text("📩 Escríbeme al privado para actualizar.")
-        return ConversationHandler.END
-
-    uid = str(update.effective_user.id)
-
-    user = supabase.table("users").select("uid").eq("uid", uid).execute()
-    if not user.data:
-        await update.message.reply_text("❌ No estás registrado. Usa /start.")
-        return ConversationHandler.END
-
-    context.user_data.clear()
-    context.user_data["uid"] = uid
-    context.user_data["is_act"] = True
-
-    await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
-    return ASK_ATK
-
-# ================= ATK / DEF =================
-
-async def get_atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_atk_start(update, context):
     try:
         context.user_data["atk"] = parse_power(update.message.text)
     except:
-        await update.message.reply_text("❌ Valor inválido. Ej: 120k o 1.5m")
+        await update.message.reply_text("❌ Valor inválido.")
         return ASK_ATK
 
     await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
     return ASK_DEF
 
-async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_def_start(update, context):
     try:
         defense = parse_power(update.message.text)
     except:
         await update.message.reply_text("❌ Valor inválido.")
         return ASK_DEF
 
-    uid = context.user_data.get("uid")
-    if not uid:
-        await update.message.reply_text("⚠️ Sesión inválida. Usa /start o /act.")
-        return ConversationHandler.END
-
-    # ===== /act =====
-    if context.user_data.get("is_act"):
-        supabase.table("users").update({
-            "atk": context.user_data["atk"],
-            "def": defense,
-            "sent_war": False
-        }).eq("uid", uid).execute()
-
-        await update.message.reply_text("✅ Poder actualizado.")
-        return ConversationHandler.END
-
-    # ===== /start =====
-    for key in ("guser", "race", "atk"):
-        if key not in context.user_data:
-            await update.message.reply_text("⚠️ Registro incompleto. Usa /start.")
-            return ConversationHandler.END
+    uid = context.user_data["uid"]
 
     supabase.table("users").insert({
         "uid": uid,
@@ -191,9 +139,56 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Registro completado.")
     return ConversationHandler.END
 
+# ================= /act =================
+
+async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("📩 Escríbeme al privado para actualizar.")
+        return ConversationHandler.END
+
+    uid = str(update.effective_user.id)
+    user = supabase.table("users").select("uid").eq("uid", uid).execute()
+    if not user.data:
+        await update.message.reply_text("❌ No estás registrado.")
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    context.user_data["uid"] = uid
+
+    await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
+    return ASK_ATK
+
+async def get_atk_act(update, context):
+    try:
+        context.user_data["atk"] = parse_power(update.message.text)
+    except:
+        await update.message.reply_text("❌ Valor inválido.")
+        return ASK_ATK
+
+    await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
+    return ASK_DEF
+
+async def get_def_act(update, context):
+    try:
+        defense = parse_power(update.message.text)
+    except:
+        await update.message.reply_text("❌ Valor inválido.")
+        return ASK_DEF
+
+    uid = context.user_data["uid"]
+
+    supabase.table("users").update({
+        "atk": context.user_data["atk"],
+        "def": defense,
+        "sent_war": False
+    }).eq("uid", uid).execute()
+
+    await update.message.reply_text("✅ Poder actualizado.")
+    return ConversationHandler.END
+
 # ================= WAR =================
 
-async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def war(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
@@ -206,7 +201,7 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔥 GUERRA INICIADA", reply_markup=kb)
 
-async def war_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def war_send(update, context):
     uid = str(update.callback_query.from_user.id)
     supabase.table("users").update({"sent_war": True}).eq("uid", uid).execute()
     await update.callback_query.answer("✅ Tropas enviadas")
@@ -216,50 +211,36 @@ async def warless(update, key, emoji):
     total = sum(u.get(key, 0) for u in users)
     await update.message.reply_text(f"{emoji} Restante: {total:,}")
 
-async def warlessa(update, context):
-    await warless(update, "atk", "⚔️")
-
-async def warlessd(update, context):
-    await warless(update, "def", "🛡")
-
-async def endwar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins.")
-        return
-
-    supabase.table("users").update({"sent_war": False}).neq("uid", "").execute()
-    await update.message.reply_text("🏁 Guerra finalizada.")
-
-# ================= ERROR HANDLER =================
-
-async def error_handler(update, context):
-    print("❌ ERROR:", context.error)
-
 # ================= APP =================
 
 tg_app = Application.builder().token(TOKEN).build()
 
-conv = ConversationHandler(
-    entry_points=[
-        CommandHandler("start", start),
-        CommandHandler("act", act)
-    ],
+conv_start = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
     states={
         ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
         ASK_RACE: [CallbackQueryHandler(get_race, pattern="^race_")],
-        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
-        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
+        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk_start)],
+        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def_start)],
     },
     fallbacks=[]
 )
 
-tg_app.add_handler(conv)
+conv_act = ConversationHandler(
+    entry_points=[CommandHandler("act", act)],
+    states={
+        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk_act)],
+        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def_act)],
+    },
+    fallbacks=[]
+)
+
+tg_app.add_handler(conv_start)
+tg_app.add_handler(conv_act)
 tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", warlessa))
-tg_app.add_handler(CommandHandler("warlessd", warlessd))
-tg_app.add_handler(CommandHandler("endwar", endwar))
+tg_app.add_handler(CommandHandler("warlessa", lambda u, c: warless(u, "atk", "⚔️")))
+tg_app.add_handler(CommandHandler("warlessd", lambda u, c: warless(u, "def", "🛡")))
 tg_app.add_handler(CallbackQueryHandler(war_send, pattern="^war_send$"))
-tg_app.add_error_handler(error_handler)
 
 # ================= FASTAPI =================
 
@@ -267,8 +248,7 @@ app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    data = await req.json()
-    await tg_app.update_queue.put(Update.de_json(data, tg_app.bot))
+    await tg_app.update_queue.put(Update.de_json(await req.json(), tg_app.bot))
     return {"ok": True}
 
 @app.on_event("startup")
