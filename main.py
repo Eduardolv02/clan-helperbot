@@ -128,8 +128,22 @@ async def get_def(update, context):
         await update.message.reply_text("❌ Valor inválido.")
         return ASK_DEF
 
+    uid = context.user_data["uid"]
+
+    # ===== VIENE DE /act =====
+    if context.user_data.get("is_act"):
+        supabase.table("users").update({
+            "atk": context.user_data["atk"],
+            "def": defense,
+            "sent_war": False
+        }).eq("uid", uid).execute()
+
+        await update.message.reply_text("✅ Poder actualizado.")
+        return ConversationHandler.END
+
+    # ===== VIENE DE /start =====
     supabase.table("users").insert({
-        "uid": context.user_data["uid"],
+        "uid": uid,
         "tg": update.effective_user.username,
         "guser": context.user_data["guser"],
         "race": context.user_data["race"],
@@ -140,6 +154,33 @@ async def get_def(update, context):
 
     await update.message.reply_text("✅ Registro completado.")
     return ConversationHandler.END
+
+# ================= ACT =================
+
+async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
+        await update.message.reply_text(
+            "📩 Para actualizar tu poder, escríbeme por privado."
+        )
+        return ConversationHandler.END
+
+    if not await belongs_to_clan(context.bot, update.effective_user.id):
+        await update.message.reply_text("🚫 No perteneces al clan.")
+        return ConversationHandler.END
+
+    uid = str(update.effective_user.id)
+
+    user = supabase.table("users").select("uid").eq("uid", uid).execute()
+    if not user.data:
+        await update.message.reply_text("❌ No estás registrado. Usa /start.")
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    context.user_data["uid"] = uid
+    context.user_data["is_act"] = True
+
+    await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
+    return ASK_ATK
 
 # ================= WAR =================
 
@@ -217,7 +258,10 @@ async def defense(update, context):
 tg_app = Application.builder().token(TOKEN).build()
 
 conv = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
+    entry_points=[
+        CommandHandler("start", start),
+        CommandHandler("act", act)
+    ],
     states={
         ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
         ASK_RACE: [CallbackQueryHandler(get_race, pattern="^race_")],
@@ -248,4 +292,4 @@ async def webhook(req: Request):
 async def startup():
     await tg_app.initialize()
     await tg_app.start()
-    print("✅ Bot listo")
+    print("✅ Bot listo y estable")
