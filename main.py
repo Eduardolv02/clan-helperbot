@@ -42,14 +42,6 @@ async def is_admin(bot, uid):
     m = await bot.get_chat_member(gid, uid)
     return m.status in ("administrator", "creator")
 
-# ================= TRACK MEMBERS =================
-async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or update.message.chat.type == "private":
-        return
-    uid = str(update.effective_user.id)
-    tg = update.effective_user.username
-    supabase.table("members").upsert({"uid": uid, "tg": tg}).execute()
-
 # ================= START / ACT =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
@@ -213,7 +205,6 @@ conv = ConversationHandler(
 
 # --- HANDLER ORDER CORRECTO ---
 tg_app.add_handler(conv)
-
 tg_app.add_handler(CommandHandler("war", war))
 tg_app.add_handler(CommandHandler("warlessa", lambda u, c: warless(u, "atk", "⚔️")))
 tg_app.add_handler(CommandHandler("warlessd", lambda u, c: warless(u, "def", "🛡")))
@@ -226,9 +217,6 @@ tg_app.add_handler(CallbackQueryHandler(delete_cancel, pattern="cancel"))
 
 tg_app.add_handler(
     MessageHandler(filters.ChatType.GROUPS & filters.Entity("mention"), mention_bot)
-)
-tg_app.add_handler(
-    MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_member)
 )
 
 # --- FASTAPI ---
