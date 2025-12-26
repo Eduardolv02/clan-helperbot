@@ -58,14 +58,9 @@ async def is_admin(bot, uid):
 async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or update.message.chat.type == "private":
         return
-
     uid = str(update.effective_user.id)
     tg = update.effective_user.username
-
-    supabase.table("members").upsert({
-        "uid": uid,
-        "tg": tg
-    }).execute()
+    supabase.table("members").upsert({"uid": uid, "tg": tg}).execute()
 
 # ================= START / ACT =================
 
@@ -73,18 +68,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         await update.message.reply_text("📩 Escríbeme al privado para registrarte.")
         return ConversationHandler.END
-
     if not await belongs(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 No perteneces al clan.")
         return ConversationHandler.END
-
     uid = str(update.effective_user.id)
     user = supabase.table("users").select("uid").eq("uid", uid).execute()
-
     if user.data:
         await update.message.reply_text("✅ Ya estás registrado.")
         return ConversationHandler.END
-
     context.user_data["uid"] = uid
     await update.message.reply_text("🎮 Escribe tu nombre en el juego:")
     return ASK_GUSER
@@ -93,14 +84,11 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         await update.message.reply_text("📩 Escríbeme al privado para actualizar stats.")
         return ConversationHandler.END
-
     uid = str(update.effective_user.id)
     user = supabase.table("users").select("uid").eq("uid", uid).execute()
-
     if not user.data:
         await update.message.reply_text("🚫 Debes registrarte primero con /start")
         return ConversationHandler.END
-
     context.user_data["uid"] = uid
     await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
     return ASK_ATK
@@ -138,7 +126,6 @@ async def get_def(update, context):
         "def": parse_power(update.message.text),
         "send": False
     }).execute()
-
     supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
     await update.message.reply_text("✅ Registro completado.")
     return ConversationHandler.END
@@ -148,9 +135,7 @@ async def get_def(update, context):
 async def war(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
         return
-
     supabase.table("users").update({"send": False}).neq("uid", "").execute()
-
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚔️ Enviar tropas", callback_data="send")]
     ])
@@ -171,27 +156,21 @@ async def warless(update, key, emoji):
 async def delete(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
         return
-
     members = supabase.table("members").select("*").execute().data
     users = {u["uid"]: u for u in supabase.table("users").select("*").execute().data}
-
     kb = []
     for m in members:
         label = f"@{m['tg']}"
         if m["uid"] in users:
             label += f" (🎮 {users[m['uid']]['guser']})"
         kb.append([InlineKeyboardButton(label, callback_data=f"askdel_{m['uid']}")])
-
     await update.message.reply_text("🗑 Selecciona usuario:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def delete_ask(update, context):
     uid = update.callback_query.data.split("_")[1]
-
     kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_{uid}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
-        ]
+        [InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_{uid}"),
+         InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]
     ])
     await update.callback_query.edit_message_text(
         "⚠️ ¿Confirmas expulsar y borrar este usuario?",
@@ -201,11 +180,9 @@ async def delete_ask(update, context):
 async def delete_confirm(update, context):
     uid = update.callback_query.data.split("_")[1]
     gid = get_group_id()
-
     await context.bot.ban_chat_member(gid, uid)
     supabase.table("members").delete().eq("uid", uid).execute()
     supabase.table("users").delete().eq("uid", uid).execute()
-
     await update.callback_query.edit_message_text("❌ Usuario eliminado.")
 
 async def delete_cancel(update, context):
@@ -216,13 +193,10 @@ async def delete_cancel(update, context):
 async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type == "private":
         return
-
     if f"@{context.bot.username}" not in update.message.text:
         return
-
     uid = update.effective_user.id
     admin = await is_admin(context.bot, uid)
-
     msg = (
         "🔥 ¡El clan no se rinde!\n"
         "⚔️ Cada guerrero cuenta, envía tus tropas y asegura la victoria.\n\n"
@@ -232,7 +206,6 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/warlessa – Ataque restante\n"
         "/warlessd – Defensa restante\n"
     )
-
     if admin:
         msg += (
             "\n👑 *Admin:*\n"
@@ -240,7 +213,6 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/pspy – No registrados\n"
             "/delete – Expulsar miembros"
         )
-
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 # ================= APP =================
@@ -255,11 +227,11 @@ conv = ConversationHandler(
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
         ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
-    fallbacks=[]
+    fallbacks=[],
+    per_message=True
 )
 
-tg_app.add_handler(MessageHandler(filters.ALL, track_member))
-tg_app.add_handler(MessageHandler(filters.TEXT, mention_bot))
+# --- HANDLER ORDER CORRECTO ---
 tg_app.add_handler(conv)
 
 tg_app.add_handler(CommandHandler("war", war))
@@ -272,6 +244,15 @@ tg_app.add_handler(CallbackQueryHandler(delete_ask, pattern="askdel_"))
 tg_app.add_handler(CallbackQueryHandler(delete_confirm, pattern="confirm_"))
 tg_app.add_handler(CallbackQueryHandler(delete_cancel, pattern="cancel"))
 
+tg_app.add_handler(
+    MessageHandler(filters.ChatType.GROUPS & filters.Entity("mention"), mention_bot)
+)
+
+tg_app.add_handler(
+    MessageHandler(filters.ChatType.GROUPS & filters.ALL, track_member)
+)
+
+# --- FASTAPI ---
 app = FastAPI()
 
 @app.post("/webhook")
