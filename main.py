@@ -8,7 +8,7 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters
-) 
+)
 
 # ─────────────────────────────
 # ENV
@@ -43,19 +43,57 @@ def is_admin(uid):
     return admins and str(uid) in admins.split(",")
 
 
+def save_member(uid, tg, registered=False):
+    supabase.table("members").upsert({
+        "uid": str(uid),
+        "tg": tg,
+        "registered": registered
+    }).execute()
+
+
+def mark_registered(uid):
+    supabase.table("members").update(
+        {"registered": True}
+    ).eq("uid", str(uid)).execute()
+
+
 # ─────────────────────────────
-# AUTO GUARDAR MIEMBROS
+# AUTO GUARDAR MIEMBROS (MENSAJES)
 # ─────────────────────────────
 async def capture_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not is_group(update.message.chat.id):
+    if not update.message:
+        return
+
+    chat_id = update.message.chat.id
+
+    # Guardar group_id automáticamente la primera vez
+    if not get_setting("group_id"):
+        set_setting("group_id", str(chat_id))
+        await update.message.reply_text(
+            "🤖 *Bot del Clan ACTIVADO*\n\n"
+            "Listo para registrar guerreros ⚔️",
+            parse_mode="Markdown"
+        )
+
+    if not is_group(chat_id):
         return
 
     u = update.message.from_user
-    supabase.table("members").upsert({
-        "uid": str(u.id),
-        "tg": u.username,
-        "registered": False
-    }).execute()
+    save_member(u.id, u.username, False)
+
+
+# ─────────────────────────────
+# AUTO GUARDAR NUEVOS MIEMBROS
+# ─────────────────────────────
+async def capture_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.new_chat_members:
+        return
+
+    if not is_group(update.message.chat.id):
+        return
+
+    for u in update.message.new_chat_members:
+        save_member(u.id, u.username, False)
 
 
 # ─────────────────────────────
@@ -66,11 +104,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     u = update.message.from_user
-    supabase.table("members").upsert({
-        "uid": str(u.id),
-        "tg": u.username,
-        "registered": True
-    }).execute()
+
+    save_member(u.id, u.username, True)
+    mark_registered(u.id)
 
     await update.message.reply_text("✅ Registrado en el clan.")
 
@@ -98,6 +134,8 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "def": deff
     }).execute()
 
+    mark_registered(u.id)
+
     await update.message.reply_text("📊 Stats actualizados.")
 
 
@@ -121,7 +159,7 @@ async def deff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────
-# WAR SYSTEM
+# WAR SYSTEM (SIN TOCAR)
 # ─────────────────────────────
 async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.message.from_user.id):
@@ -136,7 +174,7 @@ async def warlessa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_setting("war_active") != "true":
         return
 
-    users = supabase.table("users").select("uid,tg,atk").execute().data
+    users = supabase.table("users").select("uid,tg").execute().data
     voted = {x["uid"] for x in supabase.table("war_votes").select("uid").execute().data}
 
     msg = "❌ ATK pendiente:\n"
@@ -167,16 +205,19 @@ async def pspy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     r = supabase.table("members").select("tg").eq("registered", False).execute()
-    msg = "🕵️ NO REGISTRADOS:\n"
+    msg = "🕵️ NO REGISTRADOS:\n\n"
     for x in r.data:
-        msg += f"@{x['tg']}\n"
+        if x["tg"]:
+            msg += f"@{x['tg']}\n"
     await update.message.reply_text(msg)
 
 
 # ─────────────────────────────
 # HANDLERS
 # ─────────────────────────────
+tg_app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, capture_new_members))
 tg_app.add_handler(MessageHandler(filters.ALL, capture_member))
+
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("act", act))
 tg_app.add_handler(CommandHandler("atk", atk))
@@ -186,6 +227,7 @@ tg_app.add_handler(CommandHandler("warlessa", warlessa))
 tg_app.add_handler(CommandHandler("warlessd", warlessd))
 tg_app.add_handler(CommandHandler("endwar", endwar))
 tg_app.add_handler(CommandHandler("pspy", pspy))
+
 
 # ─────────────────────────────
 # WEBHOOK
@@ -200,10 +242,4 @@ async def webhook(req: Request):
 @app.on_event("startup")
 async def startup():
     await tg_app.initialize()
-    gid = get_setting("group_id")
-    if gid:
-        await tg_app.bot.send_message(
-            gid,
-            "🤖 *Bot del Clan ONLINE*\nListo para la guerra ⚔️",
-            parse_mode="Markdown"
-        )
+    print("🤖 Bot listo")
