@@ -66,6 +66,8 @@ async def track_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.message.from_user
     uid = str(u.id)
 
+    print(f"DEBUG: Tracking message from {u.username or u.first_name} (UID: {uid})")  # Debug
+
     # Upsert en members: guarda uid, tg, registered=False si no existe
     supabase.table("members").upsert({
         "uid": uid,
@@ -76,6 +78,7 @@ async def track_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= START / REGISTRO =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: /start called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Usted no pertenece al clan.")
         return ConversationHandler.END
@@ -150,6 +153,7 @@ async def get_def(update, context):
 # ================= ACT =================
 
 async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: /act called in chat {update.message.chat.id}")  # Debug
     if not await belongs_to_clan(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo miembros del clan.")
         return ConversationHandler.END
@@ -167,6 +171,7 @@ async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= WAR =================
 
 async def war(update, context):
+    print(f"DEBUG: /war called in chat {update.message.chat.id}")  # Debug
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
@@ -210,6 +215,7 @@ async def endwar(update, context):
 # ================= LISTAS =================
 
 async def show(update, key):
+    print(f"DEBUG: /{'atk' if key == 'atk' else 'def'} called in chat {update.message.chat.id}")  # Debug
     members_registered = {m["uid"] for m in supabase.table("members").select("uid").eq("registered", True).execute().data}
     users = [u for u in supabase.table("users").select("*").execute().data if u["uid"] in members_registered]
     
@@ -232,6 +238,7 @@ async def defense(update, context):
 # ================= SPY =================
 
 async def spy(update, context):
+    print(f"DEBUG: /spy called in chat {update.message.chat.id}")  # Debug
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
@@ -279,11 +286,13 @@ app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    update = Update.de_json(await req.json(), tg_app.bot)
+    data = await req.json()
+    print(f"DEBUG: Received update: {data}")  # Debug
+    update = Update.de_json(data, tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
 
 @app.on_event("startup")
 async def startup():
     await tg_app.initialize()
-    print("✅ Bot listo")
+    print("✅ Bot listo")s
