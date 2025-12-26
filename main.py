@@ -53,23 +53,35 @@ async def is_admin(bot, uid):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text("📩 Escríbeme al privado para registrarte.")
+        await update.message.reply_text(
+            "📩 *Para registrarte debes escribirme al privado.*",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     if not await belongs(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 No perteneces al clan.")
+        await update.message.reply_text(
+            "🚫 *No perteneces al clan.*\n\nÚnete primero y luego vuelve 😉",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     uid = str(update.effective_user.id)
     exists = supabase.table("users").select("uid").eq("uid", uid).execute()
     if exists.data:
-        await update.message.reply_text("✅ Ya estás registrado.")
+        await update.message.reply_text(
+            "✅ *Ya estás registrado.*\n\nSi necesitas actualizar tu poder usa /act",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     context.user_data.clear()
     context.user_data["uid"] = uid
 
-    await update.message.reply_text("🎮 Escribe tu nombre en el juego:")
+    await update.message.reply_text(
+        "🎮 *Bienvenido al clan*\n\nEscribe tu *nombre dentro del juego*:",
+        parse_mode="Markdown"
+    )
     return ASK_GUSER
 
 async def get_guser(update, context):
@@ -81,7 +93,11 @@ async def get_guser(update, context):
         [InlineKeyboardButton("🐸 Rana", callback_data="race_rana")]
     ])
 
-    await update.message.reply_text("🏹 Selecciona tu RAZA:", reply_markup=kb)
+    await update.message.reply_text(
+        "🧬 *Selecciona tu raza:*",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
     return ASK_RACE
 
 async def get_race(update, context):
@@ -100,24 +116,31 @@ async def get_race(update, context):
         return ConversationHandler.END
 
     context.user_data["race"] = race
-    await q.edit_message_text("⚔️ Ingresa tu ATAQUE:")
+
+    await q.edit_message_text(
+        f"⚔️ *Raza seleccionada:* {race}\n\nAhora escribe tu *ATAQUE* (ej: 120k, 2.5m)",
+        parse_mode="Markdown"
+    )
     return ASK_ATK
 
 async def get_atk_start(update, context):
     try:
         context.user_data["atk"] = parse_power(update.message.text)
     except:
-        await update.message.reply_text("❌ Valor inválido.")
+        await update.message.reply_text("❌ Valor inválido. Usa números, k o m.")
         return ASK_ATK
 
-    await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
+    await update.message.reply_text(
+        "🛡 *Perfecto.* Ahora escribe tu *DEFENSA*:",
+        parse_mode="Markdown"
+    )
     return ASK_DEF
 
 async def get_def_start(update, context):
     try:
         defense = parse_power(update.message.text)
     except:
-        await update.message.reply_text("❌ Valor inválido.")
+        await update.message.reply_text("❌ Valor inválido. Intenta de nuevo.")
         return ASK_DEF
 
     uid = context.user_data["uid"]
@@ -136,36 +159,49 @@ async def get_def_start(update, context):
         {"registered": True}
     ).eq("uid", uid).execute()
 
-    await update.message.reply_text("✅ Registro completado.")
+    await update.message.reply_text(
+        "🎉 *Registro completado con éxito.*\n\nPrepárate para la guerra ⚔️",
+        parse_mode="Markdown"
+    )
     return ConversationHandler.END
 
 # ================= /act =================
 
 async def act(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text("📩 Escríbeme al privado para actualizar.")
+        await update.message.reply_text(
+            "📩 Escríbeme al privado para actualizar tu poder."
+        )
         return ConversationHandler.END
 
     uid = str(update.effective_user.id)
     user = supabase.table("users").select("uid").eq("uid", uid).execute()
     if not user.data:
-        await update.message.reply_text("❌ No estás registrado.")
+        await update.message.reply_text(
+            "❌ No estás registrado.\nUsa /start primero."
+        )
         return ConversationHandler.END
 
     context.user_data.clear()
     context.user_data["uid"] = uid
 
-    await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:")
+    await update.message.reply_text(
+        "⚔️ *Actualización de poder*\n\nEscribe tu nuevo *ATAQUE*:",
+        parse_mode="Markdown"
+    )
     return ASK_ATK
 
 async def get_atk_act(update, context):
     try:
         context.user_data["atk"] = parse_power(update.message.text)
     except:
-        await update.message.reply_text("❌ Valor inválido.")
+        await update.message.reply_text("❌ Valor inválido. Intenta de nuevo.")
         return ASK_ATK
 
-    await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
+    await update.message.reply_text(
+        "🛡 Ahora escribe tu nueva *DEFENSA*:",
+        parse_mode="Markdown"
+    )
     return ASK_DEF
 
 async def get_def_act(update, context):
@@ -183,33 +219,11 @@ async def get_def_act(update, context):
         "sent_war": False
     }).eq("uid", uid).execute()
 
-    await update.message.reply_text("✅ Poder actualizado.")
+    await update.message.reply_text(
+        "✅ *Poder actualizado correctamente.*\n\n¡Listo para la batalla! ⚔️",
+        parse_mode="Markdown"
+    )
     return ConversationHandler.END
-
-# ================= WAR =================
-
-async def war(update, context):
-    if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins.")
-        return
-
-    supabase.table("users").update({"sent_war": False}).neq("uid", "").execute()
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]
-    ])
-
-    await update.message.reply_text("🔥 GUERRA INICIADA", reply_markup=kb)
-
-async def war_send(update, context):
-    uid = str(update.callback_query.from_user.id)
-    supabase.table("users").update({"sent_war": True}).eq("uid", uid).execute()
-    await update.callback_query.answer("✅ Tropas enviadas")
-
-async def warless(update, key, emoji):
-    users = supabase.table("users").select("*").eq("sent_war", False).execute().data
-    total = sum(u.get(key, 0) for u in users)
-    await update.message.reply_text(f"{emoji} Restante: {total:,}")
 
 # ================= APP =================
 
@@ -218,10 +232,10 @@ tg_app = Application.builder().token(TOKEN).build()
 conv_start = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
     states={
-        ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
+        ASK_GUSER: [MessageHandler(filters.TEXT, get_guser)],
         ASK_RACE: [CallbackQueryHandler(get_race, pattern="^race_")],
-        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk_start)],
-        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def_start)],
+        ASK_ATK: [MessageHandler(filters.TEXT, get_atk_start)],
+        ASK_DEF: [MessageHandler(filters.TEXT, get_def_start)],
     },
     fallbacks=[]
 )
@@ -229,18 +243,14 @@ conv_start = ConversationHandler(
 conv_act = ConversationHandler(
     entry_points=[CommandHandler("act", act)],
     states={
-        ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk_act)],
-        ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def_act)],
+        ASK_ATK: [MessageHandler(filters.TEXT, get_atk_act)],
+        ASK_DEF: [MessageHandler(filters.TEXT, get_def_act)],
     },
     fallbacks=[]
 )
 
 tg_app.add_handler(conv_start)
 tg_app.add_handler(conv_act)
-tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", lambda u, c: warless(u, "atk", "⚔️")))
-tg_app.add_handler(CommandHandler("warlessd", lambda u, c: warless(u, "def", "🛡")))
-tg_app.add_handler(CallbackQueryHandler(war_send, pattern="^war_send$"))
 
 # ================= FASTAPI =================
 
@@ -255,4 +265,4 @@ async def webhook(req: Request):
 async def startup():
     await tg_app.initialize()
     await tg_app.start()
-    print("✅ Bot listo y estable")
+    print("✅ Bot listo, fluido y estable")
