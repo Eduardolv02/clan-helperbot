@@ -29,7 +29,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)  # Agregué ASK_RACE
+ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
 
 # ================= UTIL =================
 
@@ -111,12 +111,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_guser(update, context):
     context.user_data["guser"] = update.message.text
-    await update.message.reply_text("🏹 Ingresa tu *RAZA* (ej: Humano, Elfo):", parse_mode="Markdown")
+    
+    # Mostrar botones para seleccionar raza
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🐸 Rana", callback_data="race_rana")],
+        [InlineKeyboardButton("🐱 Gato", callback_data="race_gato")],
+        [InlineKeyboardButton("🐶 Perro", callback_data="race_perro")]
+    ])
+    
+    await update.message.reply_text(
+        "🏹 *Selecciona tu RAZA*:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
     return ASK_RACE
 
 async def get_race(update, context):
-    context.user_data["race"] = update.message.text
-    await update.message.reply_text("⚔️ Ingresa tu *ATAQUE*:", parse_mode="Markdown")
+    query = update.callback_query
+    await query.answer()
+    
+    # Guardar la raza seleccionada
+    race_map = {
+        "race_rana": "Rana",
+        "race_gato": "Gato",
+        "race_perro": "Perro"
+    }
+    context.user_data["race"] = race_map.get(query.data, "Desconocida")
+    
+    await query.edit_message_text("⚔️ Ingresa tu *ATAQUE*:", parse_mode="Markdown")
     return ASK_ATK
 
 async def get_atk(update, context):
@@ -226,7 +248,7 @@ async def show(update, key):
     
     lines = []
     for u in users:
-        lines.append(f"🎮 *{u['guser']}* ({u['race']})\n└ {icon} `{u[key]:,}`")
+        lines.append(f"🎮 *{u['guser']}*\n└ {icon} `{u[key]:,}`")  # Solo guser, sin (race)
     
     msg = (
         f"{icon} *PODER DEL CLAN*\n\n"
@@ -305,7 +327,7 @@ conv = ConversationHandler(
     entry_points=[CommandHandler("start", start), CommandHandler("act", act)],
     states={
         ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
-        ASK_RACE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_race)],
+        ASK_RACE: [CallbackQueryHandler(get_race, pattern="race_")],  # Handler para botones de raza
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
         ASK_DEF: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_def)],
     },
