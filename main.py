@@ -2,14 +2,9 @@ import os
 import asyncio
 from datetime import datetime
 from fastapi import FastAPI, Request
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
-    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -62,61 +57,53 @@ async def belongs_to_clan(bot, user_id):
     except:
         return False
 
-# ================= MEMBER TRACK =================
+# ================= AUTO TRACK MENSAJES =================
+
+async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.chat:
+        return
+
+    gid = get_group_id()
+    if update.message.chat.id != gid:
+        return
+
+    user = update.effective_user
+    supabase.table("members").upsert({
+        "uid": str(user.id),
+        "tg": user.username or user.first_name,
+        "registered": False
+    }).execute()
+
+# ================= MEMBER TRACK (JOIN / LEAVE) =================
 
 async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.chat_member.chat
-
     supabase.table("settings").upsert({
         "key": "group_id",
         "value": str(chat.id)
     }).execute()
 
-    new = update.chat_member.new_chat_member
-    uid = str(new.user.id)
-
-    if new.status in ("member", "administrator", "creator"):
-        supabase.table("members").upsert({
-            "uid": uid,
-            "tg": new.user.username or new.user.first_name,
-            "registered": False
-        }).execute()
-    else:
-        supabase.table("members").delete().eq("uid", uid).execute()
-
 # ================= START / REGISTRO =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await belongs_to_clan(context.bot, update.effective_user.id):
-        await update.message.reply_text(
-            "🚫 *Acceso denegado*\n\n"
-            "Solo miembros del mejor clan hispanohablante 💪🔥",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("🚫 Solo miembros del clan")
         return ConversationHandler.END
 
     uid = str(update.effective_user.id)
     context.user_data["uid"] = uid
 
-    if context.args and context.args[0] == "act":
-        await update.message.reply_text("⚔️ Ingresa tu *nuevo ATAQUE*:", parse_mode="Markdown")
-        return ASK_ATK
-
-    await update.message.reply_text(
-        "🎮 *Registro del Clan*\n\n"
-        "Escribe tu *nombre en el juego*:",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🎮 Escribe tu *nombre en el juego*:", parse_mode="Markdown")
     return ASK_GUSER
 
 async def get_guser(update, context):
     context.user_data["guser"] = update.message.text
-    await update.message.reply_text("⚔️ Ingresa tu *ATAQUE*:", parse_mode="Markdown")
+    await update.message.reply_text("⚔️ Ingresa tu *ATAQUE*:")
     return ASK_ATK
 
 async def get_atk(update, context):
     context.user_data["atk"] = parse_power(update.message.text)
-    await update.message.reply_text("🛡 Ingresa tu *DEFENSA*:", parse_mode="Markdown")
+    await update.message.reply_text("🛡 Ingresa tu *DEFENSA*:")
     return ASK_DEF
 
 async def get_def(update, context):
@@ -125,7 +112,7 @@ async def get_def(update, context):
     supabase.table("users").upsert({
         "uid": uid,
         "tg": update.effective_user.username,
-        "guser": context.user_data.get("guser"),
+        "guser": context.user_data["guser"],
         "atk": context.user_data["atk"],
         "def": parse_power(update.message.text)
     }).execute()
@@ -134,18 +121,14 @@ async def get_def(update, context):
         "registered": True
     }).eq("uid", uid).execute()
 
-    await update.message.reply_text(
-        "✅ *Registro completado*\n"
-        "Ya formas parte del poder del clan 💪🔥",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("✅ Registro completo")
     return ConversationHandler.END
 
 # ================= WAR =================
 
 async def war(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins", parse_mode="Markdown")
+        await update.message.reply_text("🚫 Solo admins")
         return
 
     supabase.table("war_votes").delete().neq("uid", "").execute()
@@ -155,79 +138,55 @@ async def war(update, context):
     ])
 
     await update.message.reply_text(
-        "🔥 *GUERRA INICIADA*\n\n"
-        "Cuando envíes tus tropas, confirma aquí 👇",
+        "🔥 *GUERRA INICIADA*\n\nPulsa cuando envíes tropas",
         reply_markup=kb,
         parse_mode="Markdown"
     )
 
 async def war_callback(update, context):
     uid = str(update.callback_query.from_user.id)
+
+    if not await belongs_to_clan(context.bot, int(uid)):
+        await update.callback_query.answer("No perteneces al clan", show_alert=True)
+        return
+
     supabase.table("war_votes").upsert({
         "uid": uid,
         "voted": True
     }).execute()
+
     await update.callback_query.answer("✅ Tropas confirmadas")
 
-async def warless(update, key, emoji):
-    users = supabase.table("users").select("*").execute().data
-    votes = {
-        v["uid"] for v in supabase.table("war_votes").select("uid").execute().data
-    }
-    total = sum(u[key] for u in users if u["uid"] not in votes)
-    await update.message.reply_text(f"{emoji} *Pendiente:* `{total:,}`", parse_mode="Markdown")
+# ================= ELIMINAR =================
 
-async def warlessa(update, context):
-    await warless(update, "atk", "⚔️")
+async def eliminar(update, context):
+    if not await is_admin(context.bot, update.effective_user.id):
+        await update.message.reply_text("🚫 Solo admins")
+        return
 
-async def warlessd(update, context):
-    await warless(update, "def", "🛡")
+    if not context.args:
+        await update.message.reply_text("Uso: /eliminar <guser>")
+        return
 
-async def endwar(update, context):
-    supabase.table("war_votes").delete().neq("uid", "").execute()
-    await update.message.reply_text("🏁 *Guerra finalizada*", parse_mode="Markdown")
+    guser = " ".join(context.args)
 
-# ================= LISTAS =================
+    supabase.table("users").delete().eq("guser", guser).execute()
+    supabase.table("members").update({"registered": False}).execute()
 
-async def show(update, key):
-    users = supabase.table("users").select("*").execute().data
-    icon = "⚔️" if key == "atk" else "🛡"
-
-    total = 0
-    lines = []
-
-    for u in users:
-        total += u[key]
-        lines.append(f"🎮 *{u['guser']}*\n└ {icon} `{u[key]:,}`")
-
-    msg = (
-        f"{icon} *PODER DEL CLAN*\n\n"
-        "━━━━━━━━━━━━━━\n"
-        + "\n\n".join(lines) +
-        "\n━━━━━━━━━━━━━━\n\n"
-        f"🔥 *TOTAL:* `{total:,}`"
-    )
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-async def atk(update, context):
-    await show(update, "atk")
-
-async def defense(update, context):
-    await show(update, "def")
+    await update.message.reply_text(f"🗑 Jugador *{guser}* eliminado", parse_mode="Markdown")
 
 # ================= PSPY =================
 
 async def pspy(update, context):
     if not await is_admin(context.bot, update.effective_user.id):
-        await update.message.reply_text("🚫 Solo admins", parse_mode="Markdown")
+        await update.message.reply_text("🚫 Solo admins")
         return
 
     members = supabase.table("members").select("*").execute().data
     no_reg = [m for m in members if not m["registered"]]
 
     if not no_reg:
-        await update.message.reply_text("✅ Todos registrados", parse_mode="Markdown")
+        await update.message.reply_text("✅ Todos registrados")
         return
 
     msg = "🕵️ *NO REGISTRADOS*\n\n"
@@ -236,45 +195,12 @@ async def pspy(update, context):
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# ================= HELP =================
-
-async def helpc(update, context):
-    await update.message.reply_text(
-        "📖 *COMANDOS DEL CLAN*\n\n"
-        "📋 /start – Registro\n"
-        "📋 /act – Actualizar stats\n\n"
-        "📊 /atk – Ataque clan\n"
-        "📊 /def – Defensa clan\n\n"
-        "⚔️ /war – Iniciar guerra\n"
-        "⚔️ /warlessa – ATK pendiente\n"
-        "⚔️ /warlessd – DEF pendiente\n"
-        "⚔️ /endwar – Finalizar\n\n"
-        "🕵️ /pspy – No registrados\n",
-        parse_mode="Markdown"
-    )
-
-# ================= DAILY MESSAGE =================
-
-async def energy_job(app):
-    while True:
-        now = datetime.now()
-        if now.hour == 19 and now.minute == 0:
-            gid = get_group_id()
-            if gid:
-                await app.bot.send_message(
-                    gid,
-                    "⚡ *ENERGÍA RENOVADA* ⚡",
-                    parse_mode="Markdown"
-                )
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# ================= TELEGRAM APP =================
+# ================= TELEGRAM =================
 
 tg_app = Application.builder().token(TOKEN).build()
 
 conv = ConversationHandler(
-    entry_points=[CommandHandler("start", start), CommandHandler("act", start)],
+    entry_points=[CommandHandler("start", start)],
     states={
         ASK_GUSER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_guser)],
         ASK_ATK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_atk)],
@@ -284,15 +210,11 @@ conv = ConversationHandler(
 )
 
 tg_app.add_handler(ChatMemberHandler(track_member))
+tg_app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, track_message))
 tg_app.add_handler(conv)
-tg_app.add_handler(CommandHandler("atk", atk))
-tg_app.add_handler(CommandHandler("def", defense))
 tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", warlessa))
-tg_app.add_handler(CommandHandler("warlessd", warlessd))
-tg_app.add_handler(CommandHandler("endwar", endwar))
+tg_app.add_handler(CommandHandler("eliminar", eliminar))
 tg_app.add_handler(CommandHandler("pspy", pspy))
-tg_app.add_handler(CommandHandler("helpc", helpc))
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="war_yes"))
 
 # ================= FASTAPI =================
@@ -309,5 +231,15 @@ async def webhook(req: Request):
 async def startup():
     await tg_app.initialize()
     await tg_app.bot.set_webhook(WEBHOOK_URL)
-    tg_app.create_task(energy_job(tg_app))
-    print("✅ Bot iniciado correctamente")
+
+    gid = get_group_id()
+    if gid:
+        await tg_app.bot.send_message(
+            gid,
+            "🤖 *Bot del Clan ACTIVADO*\n\n"
+            "Listo para registrar guerreros,\n"
+            "coordinar guerras y vigilar desertores 💀🔥",
+            parse_mode="Markdown"
+        )
+
+    print("✅ BOT ONLINE")
