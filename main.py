@@ -15,8 +15,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
-WAR_DURATION_HOURS = 12
+active_wars = {}  # para almacenar la guerra activa
 
 # ================= UTIL =================
 def parse_power(text: str) -> int | None:
@@ -37,8 +38,7 @@ def get_group_id():
 
 async def belongs_to_clan(bot, user_id):
     gid = get_group_id()
-    if not gid:
-        return False
+    if not gid: return False
     try:
         m = await bot.get_chat_member(gid, user_id)
         return m.status in ("member", "administrator", "creator")
@@ -47,24 +47,18 @@ async def belongs_to_clan(bot, user_id):
 
 async def is_admin(bot, user_id):
     gid = get_group_id()
-    if not gid:
-        return False
+    if not gid: return False
     try:
         m = await bot.get_chat_member(gid, user_id)
         return m.status in ("administrator", "creator")
     except:
         return False
 
-async def notify_group(bot, text):
-    gid = get_group_id()
-    if gid:
-        await bot.send_message(gid, text)
-
 # ================= START / ACT =================
 async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if update.effective_chat.type != "private":
-        await update.message.reply_text("📩 Escríbeme por privado para usar este comando.")
+        await update.message.reply_text("📩 Por favor, usa este comando en privado.")
         return ConversationHandler.END
 
     if context.user_data.get("active_process"):
@@ -109,6 +103,7 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Raza inválida.")
         context.user_data.clear()
         return ConversationHandler.END
+
     context.user_data["race"] = race
     await query.edit_message_text("⚔️ Ingresa tu ATAQUE:")
     return ASK_ATK
@@ -129,35 +124,25 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_DEF
 
     uid = context.user_data["uid"]
-    success = False
-    try:
-        if context.user_data.get("is_act"):
-            supabase.table("users").update({
-                "atk": context.user_data["atk"],
-                "def": defense,
-                "sent_war": False
-            }).eq("uid", uid).execute()
-            success = True
-            await update.message.reply_text("✅ Poder actualizado con éxito.")
-        else:
-            supabase.table("users").insert({
-                "uid": uid,
-                "tg": update.effective_user.username,
-                "guser": context.user_data["guser"],
-                "race": context.user_data["race"],
-                "atk": context.user_data["atk"],
-                "def": defense,
-                "sent_war": False
-            }).execute()
-            supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
-            success = True
-            await update.message.reply_text("✅ Registro completado con éxito.")
-    except:
-        success = False
-
-    if not success:
-        await update.message.reply_text("❌ Hubo un error al guardar los datos. Por favor, intenta de nuevo.")
-        return ASK_DEF
+    if context.user_data.get("is_act"):
+        supabase.table("users").update({
+            "atk": context.user_data["atk"],
+            "def": defense,
+            "sent_war": False
+        }).eq("uid", uid).execute()
+        await update.message.reply_text("✅ Poder actualizado con éxito.")
+    else:
+        supabase.table("users").insert({
+            "uid": uid,
+            "tg": update.effective_user.username,
+            "guser": context.user_data["guser"],
+            "race": context.user_data["race"],
+            "atk": context.user_data["atk"],
+            "def": defense,
+            "sent_war": False
+        }).execute()
+        supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
+        await update.message.reply_text("✅ Registro completado con éxito.")
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -172,6 +157,7 @@ async def cancelall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins pueden usar /cancelall.")
         return
+    # Limpiar todos los procesos activos (solo en memoria por ahora)
     await update.message.reply_text("⚠️ Todos los procesos activos de los usuarios han sido cancelados.")
 
 # ================= MOSTRAR PODER =================
@@ -189,52 +175,65 @@ async def atk(update, context): await show(update, "atk")
 async def defense(update, context): await show(update, "def")
 
 # ================= WAR =================
-active_wars = {}  # uid: end_time
-
 async def war(update, context):
-    user_id = update.effective_user.id
-    if not await is_admin(context.bot, user_id):
+    if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
-    args = context.args
-    now = datetime.now()
-    if args:
-        try:
-            h, m = map(int, args[0].split(":"))
-            now = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        except:
-            await update.message.reply_text("❌ Formato inválido. Ej: /war 6:05")
-            return
-    end_time = now + timedelta(hours=WAR_DURATION_HOURS)
-    active_wars["current"] = end_time
-    gid = get_group_id()
-    if gid:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]])
-        await context.bot.send_message(gid, f"🔥 GUERRA INICIADA a las {now.strftime('%H:%M')}! Duración: 12h.", reply_markup=kb)
-        asyncio.create_task(war_timer(context.bot, gid, end_time))
 
-async def war_timer(bot, gid, end_time):
-    checkpoints = [3,2,1,0.5,0.33,0.1666]  # horas restantes aproximadas: 3h,2h,1h,30min,20min,10min
-    msgs = [
-        "⌛ Quedan {h} horas para enviar tropas. ¡No aflojen!",
-        "⌛ Quedan {h} horas para enviar tropas. ¡Mantengan el ritmo!",
-        "⌛ Solo {h} hora para enviar tropas. ¡Aseguren la victoria!",
-        "⌛ 30 minutos restantes! 🐱 Gatos, aprovechen el saqueo!",
-        "⌛ 20 minutos restantes! 🐱 Gatos, aceleren el saqueo, no se descuiden!",
-        "⌛ 10 minutos restantes! ¡Todos a enviar tropas, inspiren al resto!.. A POR LA VICTORIAAAA!!!"
-    ]
-    for h, m in zip(checkpoints, msgs):
-        delay = (end_time - timedelta(hours=h) - datetime.now()).total_seconds()
-        if delay > 0:
-            await asyncio.sleep(delay)
-            await bot.send_message(gid, m.format(h=int(h)) + "\n⚔️ Presiona para enviar tropas", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]]))
-    await bot.send_message(gid, "🏁 GUERRA FINALIZADA")
-    active_wars.pop("current", None)
+    if active_wars.get("current"):
+        await update.message.reply_text("⚠️ Ya hay una guerra activa.")
+        return
+
+    args = context.args
+    if not args:
+        start_time = datetime.now()
+    else:
+        try:
+            t = args[0]
+            h, m = map(int, t.split(":"))
+            start_time = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+        except:
+            await update.message.reply_text("Formato inválido. Usa /war HH:MM")
+            return
+
+    gid = get_group_id()
+    end_time = start_time + timedelta(hours=12)
+    active_wars["current"] = True
+
+    # Mensaje inicial
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]])
+    await update.message.reply_text(f"🔥 GUERRA INICIADA a las {start_time.strftime('%H:%M')} - durará 12h", reply_markup=kb)
+
+    # Lanzar temporizador async
+    asyncio.create_task(war_timer(context.bot, gid, end_time))
 
 async def war_callback(update, context):
     uid = str(update.callback_query.from_user.id)
     supabase.table("users").update({"send": True, "sent_war": True}).eq("uid", uid).execute()
     await update.callback_query.answer("✅ Tropas enviadas")
+
+async def war_timer(bot, gid, end_time):
+    checkpoints = [
+        (3, "⌛ Quedan 3 horas para enviar tropas. ¡No aflojen!"),
+        (2, "⌛ Quedan 2 horas para enviar tropas. ¡Mantengan el ritmo!"),
+        (1, "⌛ Solo 1 hora para enviar tropas. ¡Aseguren la victoria!"),
+        (0.5, "⌛ 30 minutos restantes! 🐱 Gatos, aprovechen el saqueo!"),
+        (0.3333, "⌛ 20 minutos restantes! 🐱 Gatos, aceleren el saqueo!"),
+        (0.1666, "⌛ 10 minutos restantes! ¡Todos a enviar tropas, inspiren al resto!")
+    ]
+    for hours_left, message in checkpoints:
+        checkpoint_time = end_time - timedelta(hours=hours_left)
+        delay = (checkpoint_time - datetime.now()).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚔️ Enviar tropas", callback_data="war_send")]])
+            await bot.send_message(gid, message + "\n" + "⚔️ Presiona para enviar tropas", reply_markup=kb)
+    # Finalizar guerra
+    final_delay = (end_time - datetime.now()).total_seconds()
+    if final_delay > 0:
+        await asyncio.sleep(final_delay)
+    await bot.send_message(gid, "🏁 GUERRA FINALIZADA")
+    active_wars.pop("current", None)
 
 # ================= APP =================
 tg_app = Application.builder().token(TOKEN).build()
@@ -256,12 +255,10 @@ tg_app.add_handler(conv)
 tg_app.add_handler(CommandHandler("atk", atk))
 tg_app.add_handler(CommandHandler("def", defense))
 tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", lambda u,c: warless(u,"atk","⚔️")))
-tg_app.add_handler(CommandHandler("warlessd", lambda u,c: warless(u,"def","🛡")))
-tg_app.add_handler(CommandHandler("endwar", lambda u,c: asyncio.create_task(endwar(u,c))))
-tg_app.add_handler(CommandHandler("cancelall", cancelall))
 tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="^war_send$"))
+tg_app.add_handler(CommandHandler("cancelall", cancelall))
 
+# --- FASTAPI ---
 app = FastAPI()
 
 @app.post("/webhook")
@@ -275,5 +272,7 @@ async def webhook(req: Request):
 async def startup():
     await tg_app.initialize()
     await tg_app.start()
-    await notify_group(tg_app.bot, "🚀 Versión 0.013 del Clan Helper activa! Gatos, Perros, Ranas, a la batalla!!!!")
+    gid = get_group_id()
+    if gid:
+        await tg_app.bot.send_message(gid, "🔥 Clan Helper v0.012 activo!")
     print("✅ Bot listo y estable")
