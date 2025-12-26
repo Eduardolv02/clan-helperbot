@@ -65,6 +65,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     uid = str(update.effective_user.id)
+    
+    # Verificar si ya está registrado
+    member = supabase.table("members").select("registered").eq("uid", uid).execute()
+    if member.data and member.data[0]["registered"]:
+        await update.message.reply_text("✅ Ya estás registrado en el clan.")
+        return ConversationHandler.END
+
     context.user_data["uid"] = uid
 
     if context.args and context.args[0] == "act":
@@ -177,8 +184,12 @@ async def warlessd(update, context):
     await warless(update, "def", "🛡")
 
 async def endwar(update, context):
+    if not await is_admin(context.bot, update.effective_user.id):
+        await update.message.reply_text("🚫 Solo admins.")
+        return
+
     supabase.table("war_votes").delete().neq("uid", "").execute()
-    await update.message.reply_text("🏁 Guerra finalizada")
+    await update.message.reply_text("🏁 Guerra finalizada. Puedes iniciar una nueva con /war.")
 
 # ================= LISTAS =================
 
