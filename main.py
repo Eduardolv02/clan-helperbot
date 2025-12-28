@@ -1,7 +1,20 @@
+#!/usr/bin/env python3
+"""
+Clan Helper Bot - Versión corregida con /getcom
+Requerimientos de entorno:
+- BOT_TOKEN
+- SUPABASE_URL
+- SUPABASE_KEY
+Opcional:
+- PORT (por defecto 8000)
+
+Ejecutar como: python3 clan_helper_bot_with_getcom.py
+"""
+
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List, Tuple
 
 from fastapi import FastAPI, Request
 import uvicorn
@@ -19,6 +32,7 @@ from telegram.ext import (
 )
 
 from supabase import create_client
+import re
 
 # Config logging
 logging.basicConfig(level=logging.INFO)
@@ -30,37 +44,36 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not TOKEN:
-    logger.warning("BOT_TOKEN no encontrado en variables de entorno. El bot no podr\u00e1 arrancar sin ")
+    logger.warning("BOT_TOKEN no encontrado en variables de entorno. El bot no podrá arrancar sin él.")
 
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
-    logger.warning("SUPABASE_URL o SUPABASE_KEY no encontradas. Operaciones BD fallar\u00e1n si se usan.")
+    logger.warning("SUPABASE_URL o SUPABASE_KEY no encontradas. Operaciones BD fallarán si se usan.")
 
 # Estados del ConversationHandler
 ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
 
 # ================= UTIL =================
-
-def parse_power(text: str) -> Optional[int]:
-    """Parses strings like '120k', '1.5m' or plain integers and returns an int or None."""
-    try:
-        t = text.lower().replace(" ", "")
-        if t.endswith("k"):
-            return int(float(t[:-1]) * 1_000)
-        elif t.endswith("m"):
-            return int(float(t[:-1]) * 1_000_000)
-        else:
-            return int(float(t))
-    except Exception:
-        return None
+def parse_power(value: str) -> int:
+    """Parses strings like '120k', '1.5m' or plain integers and returns an int or raises ValueError."""
+    if not isinstance(value, str):
+        raise ValueError("Formato inválido")
+    v = value.strip().lower().replace(",", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([km]?)", v)
+    if not match:
+        raise ValueError("Formato inválido")
+    number = float(match.group(1))
+    suffix = match.group(2)
+    if suffix == "k":
+        number *= 1_000
+    elif suffix == "m":
+        number *= 1_000_000
+    return int(number)
 
 
 def get_group_id() -> Optional[int]:
-    """Lee la configuración 'group_id' desde la tabla settings en Supabase.
-    Retorna int o None si no está configurado o la BD no está disponible.
-    """
     try:
         if not supabase:
             return None
@@ -96,7 +109,6 @@ async def is_admin(bot, user_id: int) -> bool:
 
 # ================= START / ACT =================
 async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Validar que sea privado
     if update.effective_chat is None or update.effective_chat.type != "private":
         if update.message:
             await update.message.reply_text("🚫 Usa este comando en privado conmigo.")
@@ -112,7 +124,6 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     uid = str(user_id)
-    # Existe el usuario en la tabla users?
     exists = None
     try:
         exists = supabase.table("users").select("uid").eq("uid", uid).execute() if supabase else None
@@ -166,28 +177,30 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    power = parse_power(update.message.text) if update.message and update.message.text else None
-    if power is None:
+    try:
+        power = parse_power(update.message.text) if update.message and update.message.text else None
+    except ValueError:
         await update.message.reply_text("❌ Valor inválido. Ej: 120k o 1.5m")
         return ASK_ATK
+
     context.user_data["atk"] = power
     await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
     return ASK_DEF
 
 
 async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    defense = parse_power(update.message.text) if update.message and update.message.text else None
-    if defense is None:
+    try:
+        defense = parse_power(update.message.text) if update.message and update.message.text else None
+    except ValueError:
         await update.message.reply_text("❌ Valor inválido. Ej: 80k o 1m")
         return ASK_DEF
 
     uid = context.user_data.get("uid")
     try:
         if context.user_data.get("is_act"):
-            # Actualizar
             if supabase:
                 supabase.table("users").update({
-                    "atk": context.user_data["atk"],
+                    "atk": context.user_data.get("atk"),
                     "def": defense,
                     "sent_war": False,
                 }).eq("uid", uid).execute()
@@ -198,11 +211,15 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if user_data:
                 await update.message.reply_text(
-                    f"✅ Poder actualizado con éxito.\n🎮 Nombre: {user_data.get('guser')}\n🏹 Raza: {user_data.get('race')}\n⚔️ Ataque: {user_data.get('atk'):, if isinstance(user_data.get('atk'), int) else user_data.get('atk')}\n🛡 Defensa: {user_data.get('def'):, if isinstance(user_data.get('def'), int) else user_data.get('def')}")
+                    "✅ Poder actualizado con éxito.\n"
+                    f"🎮 Nombre: {user_data.get('guser')}\n"
+                    f"🏹 Raza: {user_data.get('race')}\n"
+                    f"⚔️ Ataque: {user_data.get('atk'):, if isinstance(user_data.get('atk'), int) else user_data.get('atk')}\n"
+                    f"🛡 Defensa: {user_data.get('def'):, if isinstance(user_data.get('def'), int) else user_data.get('def')}"
+                )
             else:
                 await update.message.reply_text("✅ Poder actualizado con éxito.")
         else:
-            # Insertar nuevo usuario
             if supabase:
                 supabase.table("users").insert({
                     "uid": uid,
@@ -213,11 +230,15 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "def": defense,
                     "sent_war": False,
                 }).execute()
-                # Marcar en members
                 supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
 
             await update.message.reply_text(
-                f"✅ Registro completado con éxito.\n🎮 Nombre: {context.user_data.get('guser')}\n🏹 Raza: {context.user_data.get('race')}\n⚔️ Ataque: {context.user_data.get('atk'):,}\n🛡 Defensa: {defense:,}")
+                "✅ Registro completado con éxito.\n"
+                f"🎮 Nombre: {context.user_data.get('guser')}\n"
+                f"🏹 Raza: {context.user_data.get('race')}\n"
+                f"⚔️ Ataque: {context.user_data.get('atk'):,}\n"
+                f"🛡 Defensa: {defense:,}"
+            )
     except Exception as e:
         logger.exception("Error saving to DB: %s", e)
         await update.message.reply_text("❌ Error al guardar. Inténtalo de nuevo.")
@@ -240,7 +261,6 @@ async def cancelall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(context.bot, user_id):
         await update.message.reply_text("🚫 Solo admins pueden usar /cancelall.")
         return
-    # Si se guarda active_process en DB, aquí se limpiaría. Por ahora limpiamos variables locales.
     await update.message.reply_text("⚠️ Todos los procesos activos de los usuarios han sido cancelados.")
 
 
@@ -381,7 +401,6 @@ async def send_delist_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         names.append(name)
         kb.append([InlineKeyboardButton(name, callback_data=f"delist_select_{uid}")])
 
-    # navegación
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️ Anterior", callback_data="delist_prev"))
@@ -434,7 +453,6 @@ async def delist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.ban_chat_member(gid, int(uid))
                 await context.bot.unban_chat_member(gid, int(uid))
             except Exception:
-                # Si falla el ban/unban, no rompemos el flujo
                 logger.exception("No se pudo banear/desbanear al usuario %s", uid)
         try:
             supabase.table("users").delete().eq("uid", uid).execute() if supabase else None
@@ -502,7 +520,6 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("No se pudo anunciar la guerra en el grupo")
 
-    # checkpoints (segundos antes del final)
     checkpoints = [
         (3 * 3600, "⏳ Faltan 3 horas para la victoria. ¡A enviar tropas!"),
         (2 * 3600, "⏳ Faltan 2 horas. ¡Gatos, saqueo a tope!"),
@@ -515,11 +532,9 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for seconds_before_end, msg in checkpoints:
         checkpoint_time = end_time - timedelta(seconds=seconds_before_end)
         if checkpoint_time > now and gid:
-            # programar job
             when = checkpoint_time - now
             context.job_queue.run_once(job_send_message, when, data={"gid": gid, "msg": msg, "kb": kb})
 
-    # programar mensaje final
     context.job_queue.run_once(job_send_message, remaining_seconds, data={"gid": gid, "msg": "🏁 La guerra ha terminado. ¡Gracias a todos por participar!", "kb": None})
 
 
@@ -619,7 +634,7 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
             supabase.table("users").delete().eq("uid", uid).execute() if supabase else None
             supabase.table("members").delete().eq("uid", uid).execute() if supabase else None
         except Exception:
-            logger.exception("Error borrando usuario que sali\u00f3 del grupo: %s", uid)
+            logger.exception("Error borrando usuario que salió del grupo: %s", uid)
 
 
 # ================= MENCION AL BOT =================
@@ -627,7 +642,6 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.entities:
         return
     for entity in update.message.entities:
-        # buscamos menciones exactas al bot
         if entity.type == "mention":
             text = update.message.text[entity.offset: entity.offset + entity.length]
             if text == f"@{context.bot.username}":
@@ -650,9 +664,59 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /allrana - Mencionar ranas (admins).
 /cancel - Cancelar proceso.
 /cancelall - Cancelar todos (admins).
+/getcom - Mostrar comandos y su función.
 """
                 await update.message.reply_text(commands)
                 return
+
+
+# ================= NEW: /getcom - devolver comandos y su descripción =================
+async def getcom(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Devuelve la lista de comandos disponibles con una descripción corta de su función."""
+    cmd_list: List[Tuple[str, str]] = [
+        ("/start", "Inicia el registro o actualización de tus stats (debe ser en privado)."),
+        ("/act", "Alias de /start: actualizar tus stats si ya estás registrado."),
+        ("/me", "Muestra tus datos registrados (nombre, raza, ataque, defensa)."),
+        ("/atk", "Muestra el ranking de ataque del clan."),
+        ("/def", "Muestra el ranking de defensa del clan."),
+        ("/member", "Agrega tu UID a la lista de miembros (registro previo)."),
+        ("/memberlist", "(Admins) Publica la lista de miembros no registrados."),
+        ("/delist", "(Admins) Gestiona y elimina miembros desde un menú interactivo."),
+        ("/war HH:MM", "(Admins) Inicia una guerra basada en la hora de inicio (ya pasada)."),
+        ("/warlessa", "Muestra poder de ataque restante (usuarios que no enviaron tropas)."),
+        ("/warlessd", "Muestra poder de defensa restante (usuarios que no enviaron tropas)."),
+        ("/endwar", "(Admins) Finaliza la guerra y resetea los flags de envío."),
+        ("/sync_members", "(Admins) Mostrar miembros no registrados (limitado por Supabase)."),
+        ("/allgato / allperro / allrana", "(Admins) Menciona usuarios por raza."),
+        ("/cancel", "Cancela el proceso actual del usuario en el conversation handler."),
+        ("/cancelall", "(Admins) Forzar cancelación de procesos (lógica simple)."),
+        ("/getcom", "Muestra esta lista de comandos y su función."),
+    ]
+
+    # Construir el mensaje en bloques para evitar superar límite de mensaje
+    lines = [f"{cmd} — {desc}" for cmd, desc in cmd_list]
+    msg = "📋 Comandos disponibles y su función:\n\n" + "\n".join(lines)
+
+    # Si es largo, dividir en varios mensajes (cada chunk < 4000 caracteres)
+    MAX = 3800
+    if len(msg) <= MAX:
+        await update.message.reply_text(msg)
+        return
+
+    # dividir en trozos
+    parts = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) + 1 > MAX:
+            parts.append(current)
+            current = line + "\n"
+        else:
+            current += line + "\n"
+    if current:
+        parts.append(current)
+
+    for p in parts:
+        await update.message.reply_text("📋 Comandos disponibles y su función:\n\n" + p)
 
 
 # ================= APP (Telegram) =================
@@ -684,66 +748,4 @@ conv = ConversationHandler(
 tg_app.add_handler(conv)
 
 tg_app.add_handler(CommandHandler("atk", atk))
-# "def" es nombre de funcion, usamos "defense" como handler
-tg_app.add_handler(CommandHandler("def", defense))
-tg_app.add_handler(CommandHandler("me", me))
-tg_app.add_handler(CommandHandler("member", member))
-tg_app.add_handler(CommandHandler("memberlist", memberlist))
-tg_app.add_handler(CommandHandler("delist", delist))
-tg_app.add_handler(CommandHandler("war", war))
-tg_app.add_handler(CommandHandler("warlessa", warlessa))
-tg_app.add_handler(CommandHandler("warlessd", warlessd))
-tg_app.add_handler(CommandHandler("endwar", endwar))
-tg_app.add_handler(CommandHandler("sync_members", sync_members))
-tg_app.add_handler(CommandHandler("allgato", allgato))
-tg_app.add_handler(CommandHandler("allperro", allperro))
-tg_app.add_handler(CommandHandler("allrana", allrana))
-tg_app.add_handler(CommandHandler("cancelall", cancelall))
-
-# Callback handlers
-tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="^war_send$"))
-tg_app.add_handler(CallbackQueryHandler(delist_callback, pattern="^delist_"))
-# Chat member updates
-try:
-    tg_app.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.CHAT_MEMBER))
-except Exception:
-    # Dependiendo de la versión de PTB, la forma de registrar ChatMemberHandler puede variar
-    logger.warning("No se pudo registrar ChatMemberHandler en esta versi\u00f3n de PTB")
-
-# Mensiones al bot
-tg_app.add_handler(MessageHandler(filters.Entity("mention"), mention_bot))
-
-# ================= FASTAPI =================
-app = FastAPI()
-
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, tg_app.bot)
-    await tg_app.update_queue.put(update)
-    return {"ok": True}
-
-
-@app.on_event("startup")
-async def startup():
-    await tg_app.initialize()
-    await tg_app.start()
-    gid = get_group_id()
-    if gid:
-        try:
-            await tg_app.bot.send_message(gid, "⚡ Version 0.1.2 del Clan Helper activa!  🎮")
-        except Exception:
-            logger.exception("No se pudo enviar mensaje de inicio al grupo")
-    logger.info("✅ Bot listo y estable")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await tg_app.stop()
-    await tg_app.shutdown()
-
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    # Arranca uvicorn para servir FastAPI (y el webhook que empuja actualizaciones al bot)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+... (file truncated because of length)
