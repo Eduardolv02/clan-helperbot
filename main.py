@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clan Helper Bot - Versión corregida con /getcom
+Clan Helper Bot - Versión con mejoras solicitadas
 Requerimientos de entorno:
 - BOT_TOKEN
 - SUPABASE_URL
@@ -8,9 +8,8 @@ Requerimientos de entorno:
 Opcional:
 - PORT (por defecto 8000)
 
-Ejecutar como: python3 clan_helper_bot_with_getcom.py
+Ejecutar como: python3 clan_helper_bot.py
 """
-
 import os
 import logging
 from datetime import datetime, timedelta
@@ -19,7 +18,10 @@ from typing import Optional, Any, Dict, List, Tuple
 from fastapi import FastAPI, Request
 import uvicorn
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,7 +32,6 @@ from telegram.ext import (
     filters,
     ChatMemberHandler,
 )
-
 from supabase import create_client
 import re
 
@@ -57,7 +58,10 @@ ASK_GUSER, ASK_RACE, ASK_ATK, ASK_DEF = range(4)
 
 # ================= UTIL =================
 def parse_power(value: str) -> int:
-    """Parses strings like '120k', '1.5m' or plain integers and returns an int or raises ValueError."""
+    """
+    Parsea valores tipo '34k', '6m', '1.5m', '34000' a int.
+    Lanza ValueError si el formato es inválido.
+    """
     if not isinstance(value, str):
         raise ValueError("Formato inválido")
     v = value.strip().lower().replace(",", "")
@@ -71,6 +75,20 @@ def parse_power(value: str) -> int:
     elif suffix == "m":
         number *= 1_000_000
     return int(number)
+
+
+def build_num_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Construye un teclado personalizado con 0-9 y las teclas k y m.
+    """
+    kb = [
+        ["1", "2", "3"],
+        ["4", "5", "6"],
+        ["7", "8", "9"],
+        ["0", "k", "m"],
+        ["Cancelar"]
+    ]
+    return ReplyKeyboardMarkup(kb, one_time_keyboard=False, resize_keyboard=True)
 
 
 def get_group_id() -> Optional[int]:
@@ -108,7 +126,21 @@ async def is_admin(bot, user_id: int) -> bool:
 
 
 # ================= START / ACT =================
+async def start_group_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manejador para /start usado desde el grupo: invita a enviar mensaje privado."""
+    bot_username = context.bot.username or "<bot>"
+    text = (
+        "⚡ *Versión de prueba: Beta 2*\n\n"
+        "Para registrarte o actualizar tus stats, por favor envíame un mensaje privado:\n"
+        f"▶️ @{bot_username}\n\n"
+        "Espera nuevos requisitos que publicará el admin. Gracias."
+    )
+    # enviar como texto simple (evita markdown si no queremos problemas con caracteres)
+    await update.message.reply_text(text)
+
+
 async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Validar que sea privado
     if update.effective_chat is None or update.effective_chat.type != "private":
         if update.message:
             await update.message.reply_text("🚫 Usa este comando en privado conmigo.")
@@ -124,6 +156,7 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     uid = str(user_id)
+    # Existe el usuario en la tabla users?
     exists = None
     try:
         exists = supabase.table("users").select("uid").eq("uid", uid).execute() if supabase else None
@@ -136,16 +169,22 @@ async def start_act_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if exists and getattr(exists, "data", None):
         context.user_data["is_act"] = True
-        await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE:", parse_mode="Markdown")
+        # usamos teclado para ingresar atk
+        await update.message.reply_text("⚔️ Ingresa tu nuevo ATAQUE (ej: 34k, 1.5m, 34000):", reply_markup=build_num_keyboard())
         return ASK_ATK
     else:
         context.user_data["is_act"] = False
-        await update.message.reply_text("🎮 Escribe tu nombre en el juego:", parse_mode="Markdown")
+        await update.message.reply_text("🎮 Escribe tu nombre en el juego:", reply_markup=ReplyKeyboardRemove())
         return ASK_GUSER
 
 
 async def get_guser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip() if update.message and update.message.text else ""
+    if text.lower() == "cancelar":
+        await update.message.reply_text("❌ Proceso cancelado.", reply_markup=ReplyKeyboardRemove())
+        context.user_data.clear()
+        return ConversationHandler.END
+
     context.user_data["guser"] = text
     if not context.user_data["guser"]:
         await update.message.reply_text("❌ Nombre inválido. Escríbelo de nuevo.")
@@ -172,32 +211,58 @@ async def get_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     context.user_data["race"] = race
-    await query.edit_message_text("⚔️ Ingresa tu ATAQUE:")
+    # pedir ataque con teclado
+    await query.edit_message_text("⚔️ Ingresa tu ATAQUE (ej: 34k, 1.5m, 34000):", reply_markup=build_num_keyboard())
     return ASK_ATK
 
 
 async def get_atk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # permitir cancelar
+    raw = update.message.text if update.message and update.message.text else ""
+    if raw.lower() == "cancelar":
+        await update.message.reply_text("❌ Proceso cancelado.", reply_markup=ReplyKeyboardRemove())
+        context.user_data.clear()
+        return ConversationHandler.END
+
     try:
-        power = parse_power(update.message.text) if update.message and update.message.text else None
+        power = parse_power(raw)
     except ValueError:
-        await update.message.reply_text("❌ Valor inválido. Ej: 120k o 1.5m")
+        await update.message.reply_text(
+            "❌ Valor inválido. Usa por ejemplo: 34000, 34k, 1.5m\nVuelve a intentar o presiona 'Cancelar'.",
+            reply_markup=build_num_keyboard()
+        )
         return ASK_ATK
 
     context.user_data["atk"] = power
-    await update.message.reply_text("🛡 Ingresa tu DEFENSA:")
+    # pedimos defensa con teclado, dejamos el teclado puesto
+    await update.message.reply_text(
+        f"🛡 Ahora ingresa tu DEFENSA (ej: 80k, 1m). Ataque registrado: {power:,}",
+        reply_markup=build_num_keyboard()
+    )
     return ASK_DEF
 
 
 async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = update.message.text if update.message and update.message.text else ""
+    if raw.lower() == "cancelar":
+        await update.message.reply_text("❌ Proceso cancelado.", reply_markup=ReplyKeyboardRemove())
+        context.user_data.clear()
+        return ConversationHandler.END
+
     try:
-        defense = parse_power(update.message.text) if update.message and update.message.text else None
+        defense = parse_power(raw)
     except ValueError:
-        await update.message.reply_text("❌ Valor inválido. Ej: 80k o 1m")
+        await update.message.reply_text(
+            "❌ Valor inválido. Usa por ejemplo: 80000, 80k, 1m\nVuelve a intentar o presiona 'Cancelar'.",
+            reply_markup=build_num_keyboard()
+        )
         return ASK_DEF
 
     uid = context.user_data.get("uid")
+    logger.info("Guardando stats para uid=%s: atk=%s def=%s", uid, context.user_data.get("atk"), defense)
     try:
         if context.user_data.get("is_act"):
+            # Actualizar usuario existente
             if supabase:
                 supabase.table("users").update({
                     "atk": context.user_data.get("atk"),
@@ -209,39 +274,53 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 user_data = None
 
-            if user_data:
-                await update.message.reply_text(
-                    "✅ Poder actualizado con éxito.\n"
-                    f"🎮 Nombre: {user_data.get('guser')}\n"
-                    f"🏹 Raza: {user_data.get('race')}\n"
-                    f"⚔️ Ataque: {user_data.get('atk'):, if isinstance(user_data.get('atk'), int) else user_data.get('atk')}\n"
-                    f"🛡 Defensa: {user_data.get('def'):, if isinstance(user_data.get('def'), int) else user_data.get('def')}"
-                )
-            else:
-                await update.message.reply_text("✅ Poder actualizado con éxito.")
+            await update.message.reply_text(
+                "✅ Poder actualizado con éxito.\n"
+                f"🎮 Nombre: {user_data.get('guser') if user_data else '—'}\n"
+                f"🏹 Raza: {user_data.get('race') if user_data else '—'}\n"
+                f"⚔️ Ataque: {context.user_data.get('atk'):,}\n"
+                f"🛡 Defensa: {defense:,}",
+                reply_markup=ReplyKeyboardRemove()
+            )
         else:
+            # Insertar nuevo usuario en users y actualizar members.tg + registered
+            tg = update.effective_user.username
             if supabase:
                 supabase.table("users").insert({
                     "uid": uid,
-                    "tg": update.effective_user.username,
+                    "tg": tg,
                     "guser": context.user_data.get("guser"),
                     "race": context.user_data.get("race"),
                     "atk": context.user_data.get("atk"),
                     "def": defense,
                     "sent_war": False,
                 }).execute()
-                supabase.table("members").update({"registered": True}).eq("uid", uid).execute()
+                # Si existe members, actualizar tg y registered
+                try:
+                    supabase.table("members").upsert({
+                        "uid": uid,
+                        "tg": tg,
+                        "registered": True,
+                        "messages": 0
+                    }).execute()
+                except Exception:
+                    # fallback: attempt update then insert
+                    try:
+                        supabase.table("members").update({"tg": tg, "registered": True}).eq("uid", uid).execute()
+                    except Exception:
+                        pass
 
             await update.message.reply_text(
                 "✅ Registro completado con éxito.\n"
                 f"🎮 Nombre: {context.user_data.get('guser')}\n"
                 f"🏹 Raza: {context.user_data.get('race')}\n"
                 f"⚔️ Ataque: {context.user_data.get('atk'):,}\n"
-                f"🛡 Defensa: {defense:,}"
+                f"🛡 Defensa: {defense:,}",
+                reply_markup=ReplyKeyboardRemove()
             )
     except Exception as e:
         logger.exception("Error saving to DB: %s", e)
-        await update.message.reply_text("❌ Error al guardar. Inténtalo de nuevo.")
+        await update.message.reply_text("❌ Error al guardar. Inténtalo de nuevo.", reply_markup=ReplyKeyboardRemove())
         return ASK_DEF
 
     context.user_data.clear()
@@ -252,7 +331,7 @@ async def get_def(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     if update.message:
-        await update.message.reply_text("❌ Proceso cancelado.")
+        await update.message.reply_text("❌ Proceso cancelado.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
@@ -261,6 +340,7 @@ async def cancelall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(context.bot, user_id):
         await update.message.reply_text("🚫 Solo admins pueden usar /cancelall.")
         return
+    # Aquí podrías limpiar flags en BD si lo deseas
     await update.message.reply_text("⚠️ Todos los procesos activos de los usuarios han sido cancelados.")
 
 
@@ -310,13 +390,17 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"🎮 Nombre: {user_data.get('guser')}\n🏹 Raza: {user_data.get('race')}\n⚔️ Ataque: {user_data.get('atk'):,}\n🛡 Defensa: {user_data.get('def'):,}"
+        f"🎮 Nombre: {user_data.get('guser')}\n"
+        f"🏹 Raza: {user_data.get('race')}\n"
+        f"⚔️ Ataque: {user_data.get('atk'):,}\n"
+        f"🛡 Defensa: {user_data.get('def'):,}"
     )
 
 
 # ================= MEMBER =================
 async def member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
+    tg = update.effective_user.username
     try:
         exists = supabase.table("members").select("uid").eq("uid", uid).execute() if supabase else None
     except Exception as e:
@@ -324,11 +408,18 @@ async def member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exists = None
 
     if exists and getattr(exists, "data", None):
+        # actualizar tg si cambió
+        try:
+            supabase.table("members").update({"tg": tg}).eq("uid", uid).execute() if supabase else None
+        except Exception:
+            pass
         await update.message.reply_text("✅ Ya estás en la lista de miembros.")
         return
 
     try:
-        supabase.table("members").insert({"uid": uid, "registered": False}).execute() if supabase else None
+        # Insertar con tg para futura mención
+        if supabase:
+            supabase.table("members").insert({"uid": uid, "tg": tg, "registered": False, "messages": 0}).execute()
     except Exception as e:
         logger.exception("Error insert member: %s", e)
 
@@ -349,9 +440,16 @@ async def memberlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mentions = []
     for m in members:
         uid = m.get("uid")
-        user_res = supabase.table("users").select("tg").eq("uid", uid).execute() if supabase else None
-        if user_res and getattr(user_res, "data", None) and user_res.data[0].get("tg"):
-            mentions.append(f"@{user_res.data[0]['tg']}")
+        # preferir tg de members, si no, buscar en users
+        tg = m.get("tg")
+        if not tg:
+            try:
+                user_res = supabase.table("users").select("tg").eq("uid", uid).execute()
+                tg = user_res.data[0]["tg"] if user_res and getattr(user_res, "data", None) and user_res.data[0].get("tg") else None
+            except Exception:
+                tg = None
+        if tg:
+            mentions.append(f"@{tg}")
         else:
             mentions.append(f"@{uid}")
 
@@ -391,11 +489,20 @@ async def send_delist_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     names = []
     for m in page_members:
         uid = m.get("uid")
-        user_data = supabase.table("users").select("guser, tg").eq("uid", uid).execute() if supabase else None
-        if user_data and getattr(user_data, "data", None) and user_data.data[0].get("guser"):
-            name = user_data.data[0]["guser"]
-        elif user_data and getattr(user_data, "data", None) and user_data.data[0].get("tg"):
-            name = f"@{user_data.data[0]['tg']}"
+        # preferir guser o tg para mostrar
+        user_data = None
+        try:
+            user_data_res = supabase.table("users").select("guser,tg").eq("uid", uid).execute() if supabase else None
+            user_data = user_data_res.data[0] if user_data_res and getattr(user_data_res, "data", None) else None
+        except Exception:
+            user_data = None
+
+        if user_data and user_data.get("guser"):
+            name = user_data.get("guser")
+        elif m.get("tg"):
+            name = f"@{m.get('tg')}"
+        elif user_data and user_data.get("tg"):
+            name = f"@{user_data.get('tg')}"
         else:
             name = f"@{uid}"
         names.append(name)
@@ -520,6 +627,7 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             logger.exception("No se pudo anunciar la guerra en el grupo")
 
+    # checkpoints (segundos antes del final)
     checkpoints = [
         (3 * 3600, "⏳ Faltan 3 horas para la victoria. ¡A enviar tropas!"),
         (2 * 3600, "⏳ Faltan 2 horas. ¡Gatos, saqueo a tope!"),
@@ -532,9 +640,11 @@ async def war(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for seconds_before_end, msg in checkpoints:
         checkpoint_time = end_time - timedelta(seconds=seconds_before_end)
         if checkpoint_time > now and gid:
+            # programar job
             when = checkpoint_time - now
             context.job_queue.run_once(job_send_message, when, data={"gid": gid, "msg": msg, "kb": kb})
 
+    # programar mensaje final
     context.job_queue.run_once(job_send_message, remaining_seconds, data={"gid": gid, "msg": "🏁 La guerra ha terminado. ¡Gracias a todos por participar!", "kb": None})
 
 
@@ -602,27 +712,25 @@ async def mention_race(update: Update, context: ContextTypes.DEFAULT_TYPE, race:
     if not await is_admin(context.bot, update.effective_user.id):
         await update.message.reply_text("🚫 Solo admins.")
         return
-    users_res = supabase.table("users").select("uid").eq("race", race).execute() if supabase else None
+    users_res = supabase.table("users").select("uid,tg").eq("race", race).execute() if supabase else None
     users = users_res.data if users_res and getattr(users_res, "data", None) else []
     if not users:
         await update.message.reply_text(f"❌ No hay usuarios de raza {race}.")
         return
-    mentions = " ".join([f"@{u['uid']}" for u in users])
+    mentions = []
+    for u in users:
+        if u.get("tg"):
+            mentions.append(f"@{u.get('tg')}")
+        else:
+            mentions.append(f"@{u.get('uid')}")
     gid = get_group_id()
     if gid:
-        await context.bot.send_message(gid, f"📢 Mención a {race}s: {mentions}")
+        await context.bot.send_message(gid, f"📢 Mención a {race}s: {' '.join(mentions)}")
 
 
-async def allgato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await mention_race(update, context, "Gato")
-
-
-async def allperro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await mention_race(update, context, "Perro")
-
-
-async def allrana(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await mention_race(update, context, "Rana")
+async def allgato(update: Update, context: ContextTypes.DEFAULT_TYPE): await mention_race(update, context, "Gato")
+async def allperro(update: Update, context: ContextTypes.DEFAULT_TYPE): await mention_race(update, context, "Perro")
+async def allrana(update: Update, context: ContextTypes.DEFAULT_TYPE): await mention_race(update, context, "Rana")
 
 
 # ================= MANEJAR MIEMBROS SALIENDO =================
@@ -647,8 +755,8 @@ async def mention_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text == f"@{context.bot.username}":
                 commands = """
 📋 Comandos disponibles:
-/start - Registrarte en el clan.
-/act - Actualizar tus stats.
+/start - Registrarte en el clan (en privado).
+/act - Actualizar tus stats (en privado).
 /me - Ver tus datos.
 /atk - Ver ranking de ataque.
 /def - Ver ranking de defensa.
@@ -693,17 +801,14 @@ async def getcom(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("/getcom", "Muestra esta lista de comandos y su función."),
     ]
 
-    # Construir el mensaje en bloques para evitar superar límite de mensaje
     lines = [f"{cmd} — {desc}" for cmd, desc in cmd_list]
     msg = "📋 Comandos disponibles y su función:\n\n" + "\n".join(lines)
 
-    # Si es largo, dividir en varios mensajes (cada chunk < 4000 caracteres)
     MAX = 3800
     if len(msg) <= MAX:
         await update.message.reply_text(msg)
         return
 
-    # dividir en trozos
     parts = []
     current = ""
     for line in lines:
@@ -726,7 +831,7 @@ async def build_application():
 
 tg_app = Application.builder().token(TOKEN).build()
 
-# Conversation handler
+# Conversation handler (timeout aumentado a 300s = 5min)
 conv = ConversationHandler(
     entry_points=[
         CommandHandler("start", start_act_entry, filters=filters.ChatType.PRIVATE),
@@ -741,11 +846,75 @@ conv = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
     per_user=True,
     per_chat=False,
-    conversation_timeout=90,
+    conversation_timeout=300,
 )
 
 # Registros de handlers
+# start en grupo -> handler que indica escribir al bot en privado
+tg_app.add_handler(CommandHandler("start", start_group_entry, filters=filters.ChatType.GROUP | filters.ChatType.SUPERGROUP))
 tg_app.add_handler(conv)
 
 tg_app.add_handler(CommandHandler("atk", atk))
-... (file truncated because of length)
+tg_app.add_handler(CommandHandler("def", defense))
+tg_app.add_handler(CommandHandler("me", me))
+tg_app.add_handler(CommandHandler("member", member))
+tg_app.add_handler(CommandHandler("memberlist", memberlist))
+tg_app.add_handler(CommandHandler("delist", delist))
+tg_app.add_handler(CommandHandler("war", war))
+tg_app.add_handler(CommandHandler("warlessa", warlessa))
+tg_app.add_handler(CommandHandler("warlessd", warlessd))
+tg_app.add_handler(CommandHandler("endwar", endwar))
+tg_app.add_handler(CommandHandler("sync_members", sync_members))
+tg_app.add_handler(CommandHandler("allgato", allgato))
+tg_app.add_handler(CommandHandler("allperro", allperro))
+tg_app.add_handler(CommandHandler("allrana", allrana))
+tg_app.add_handler(CommandHandler("cancelall", cancelall))
+tg_app.add_handler(CommandHandler("getcom", getcom))
+
+# Callback handlers
+tg_app.add_handler(CallbackQueryHandler(war_callback, pattern="^war_send$"))
+tg_app.add_handler(CallbackQueryHandler(delist_callback, pattern="^delist_"))
+# Chat member updates
+try:
+    tg_app.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.CHAT_MEMBER))
+except Exception:
+    logger.warning("No se pudo registrar ChatMemberHandler en esta versión de PTB")
+
+# Mensiones al bot
+tg_app.add_handler(MessageHandler(filters.Entity("mention"), mention_bot))
+
+# ================= FASTAPI =================
+app = FastAPI()
+
+
+@app.post("/webhook")
+async def webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.update_queue.put(update)
+    return {"ok": True}
+
+
+@app.on_event("startup")
+async def startup():
+    await tg_app.initialize()
+    await tg_app.start()
+    gid = get_group_id()
+    # Mensaje de arranque actualizado a Beta 2 y solicitud de esperar requisitos del admin
+    if gid:
+        try:
+            await tg_app.bot.send_message(gid, "⚡ Versión de prueba: Beta 2 del Clan Helper activa! 🎮\nPor favor esperen nuevos requisitos del admin.")
+        except Exception:
+            logger.exception("No se pudo enviar mensaje de inicio al grupo")
+    logger.info("✅ Bot listo y estable")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await tg_app.stop()
+    await tg_app.shutdown()
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
